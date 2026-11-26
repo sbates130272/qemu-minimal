@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: hipobject_setup
+  author: Stephen Bates
+  description: >-
+    Build hipObject from a pinned commit in the guest and install it under
+    a prefix of its own, with minio-getput-rdma, the program that puts an
+    object to an S3 store over RDMA, gets it back and compares it. Needs
+    ROCm in the guest. The build needs no device.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

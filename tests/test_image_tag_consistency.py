@@ -74,6 +74,12 @@ SDXI_RE = re.compile(r"(^|-)sdxi\.[a-f0-9]+")
 SPDK_RE = re.compile(r"(^|-)spdk\.[a-f0-9]+")
 
 
+def FleetXml_spdk(path) -> str:
+    import xml.etree.ElementTree as ET
+    return ET.parse(path).getroot().findtext(
+        "{http://qemu-tool/fleet/1.0}spdk-image") or ""
+
+
 class SpdkImage(unittest.TestCase):
     """The SPDK server is exempt from the fleet stamp, as the SDXI server
     is. What it is held to is QEMU's libvfio-user."""
@@ -92,7 +98,13 @@ class SpdkImage(unittest.TestCase):
             want = re.search(r"vfu\.[a-f0-9]+", qemu).group(0)
             self.assertRegex(spdk.rsplit(":", 1)[1], SPDK_RE, path.name)
             self.assertIn(want, spdk, path.name)
-        self.assertEqual(found, 1)
+        # The xio fleet and the storage fleet, which name one image.
+        self.assertEqual(found, 2)
+
+    def test_the_fleets_that_have_one_name_the_same_image(self):
+        refs = {FleetXml_spdk(path) for path in
+                sorted((REPO / "qemu/stacks").glob("*.xml"))} - {""}
+        self.assertEqual(len(refs), 1, refs)
 
     def test_a_stamped_spdk_tag_is_not_counted_with_the_fleets(self):
         self.assertRegex("20270101.g1234567-spdk.18d1d8d-vfu.3719c3a", SPDK_RE)
@@ -297,7 +309,8 @@ class ForkImages(unittest.TestCase):
             pairs[path.name] = tuple(pair)
         self.assertEqual(
             sorted(pairs),
-            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "xio.xml"])
+            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "storage.xml",
+             "xio.xml"])
         self.assertEqual(len(set(pairs.values())), 1, pairs)
 
     def test_stacks_workflows_and_containers_name_that_pair(self):
@@ -313,7 +326,7 @@ class ForkImages(unittest.TestCase):
         # Four fleet files, four stacks and the nine workflows whose jobs
         # run in the QEMU image: a glob that stopped matching would pass.
         self.assertGreaterEqual(named, 15)
-        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio"):
+        for stack in ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"):
             text = (REPO / "qemu/compose" / stack
                     / "docker-compose.yml").read_text()
             with self.subTest(stack=stack):
@@ -371,7 +384,8 @@ class GuestImage(unittest.TestCase):
         refs = self._backing_refs()
         self.assertEqual(
             sorted(refs),
-            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "xio.xml"])
+            ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "storage.xml",
+             "xio.xml"])
         for name, found in refs.items():
             with self.subTest(fleet=name):
                 self.assertEqual(len(found), 1, found)

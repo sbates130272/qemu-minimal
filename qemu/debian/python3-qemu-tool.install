@@ -6,6 +6,7 @@ stacks/rocm-golden.xml usr/share/qemu-tool/stacks/
 stacks/helios-tray.xml usr/share/qemu-tool/stacks/
 stacks/mi355x-server.xml usr/share/qemu-tool/stacks/
 stacks/xio.xml usr/share/qemu-tool/stacks/
+stacks/storage.xml usr/share/qemu-tool/stacks/
 # Fleet overlays, which layer onto a stack's file. `quick-start --vfu-doorbell`
 # reads vfu-doorbell.xml from here.
 overlays/vfu-doorbell.xml usr/share/qemu-tool/overlays/
@@ -43,3 +44,9 @@ compose/xio/fleet-inventory.yml usr/share/qemu-tool/compose/xio/
 compose/xio/grafana usr/share/qemu-tool/compose/xio/
 compose/xio/logging usr/share/qemu-tool/compose/xio/
 compose/xio/tapsetup usr/share/qemu-tool/compose/xio/
+compose/storage/docker-compose.yml usr/share/qemu-tool/compose/storage/
+compose/storage/prometheus.yml usr/share/qemu-tool/compose/storage/
+compose/storage/fleet-inventory.yml usr/share/qemu-tool/compose/storage/
+compose/storage/grafana usr/share/qemu-tool/compose/storage/
+compose/storage/logging usr/share/qemu-tool/compose/storage/
+compose/storage/tapsetup usr/share/qemu-tool/compose/storage/

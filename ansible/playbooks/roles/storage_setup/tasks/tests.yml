@@ -1,0 +1,295 @@
+---
+# Write, read back and compare over every path the client has, after
+# `client.yml` connected them. Every test runs whether or not the one
+# before it passed, and each leaves one line, `storage <name>: ok ...` or
+# `storage <name>: FAIL: ...`; storage_setup_results holds them all and
+# storage_setup_failed how many failed. The caller decides what a failure
+# means.
+
+- name: Find the client's own NVMe drive
+  ansible.builtin.script:
+    cmd: storage-drives.sh
+  register: storage_setup_client_drives
+  changed_when: false
+
+# The SPDK controller on PCIe, by the serial the fleet file gives it. A
+# guest with none says so in the test's own line.
+- name: Find the Key Value namespace of the SPDK controller on PCIe
+  ansible.builtin.script:
+    cmd: >-
+      storage-kv-device.sh {{ storage_setup_spdk_kv_serial | quote }}
+      {{ storage_setup_spdk_kv_nsid | int }}
+  register: storage_setup_spdk_kv
+  changed_when: false
+  failed_when: false
+
+- name: Run the block and Key Value tests
+  ansible.builtin.script:
+    cmd: "{{ item.cmd }}"
+  register: storage_setup_run_block
+  changed_when: false
+  failed_when: false
+  timeout: 300
+  loop: "{{ storage_setup_block_tests }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    storage_setup_block_tests:
+      # The client's own drive, on QEMU's emulated NVMe.
+      - name: local-nvme
+        cmd: >-
+          storage-test-lba.sh local-nvme
+          {{ (storage_setup_client_drives.stdout_lines | select | list
+              + ['/dev/no-local-nvme']) | first | quote }} 16
+      # The NVMe-oF controller inside the NIC: its block namespace.
+      - name: nic-nvmeof-lba
+        cmd: >-
+          storage-test-lba.sh nic-nvmeof-lba
+          {{ storage_setup_nic_block | quote }} 16
+      # And its Key Value namespace, NSID 2.
+      - name: nic-nvmeof-kv
+        cmd: >-
+          storage-test-kv.sh nic-nvmeof-kv
+          {{ storage_setup_nic_kv | quote }} 2
+      # The same command set with no fabric: the SPDK controller on PCIe.
+      # The namespace is on the expression's closing line on purpose: a
+      # folded scalar keeps the line break after a more-indented line, and
+      # the script would be handed two arguments and a second command.
+      - name: pcie-spdk-kv
+        cmd: >-
+          storage-test-kv.sh pcie-spdk-kv
+          {{ (storage_setup_spdk_kv.stdout_lines | select | list
+              + ['/dev/no-spdk-kv-controller']) | first | trim | quote }} {{ storage_setup_spdk_kv_nsid | int }}
+      # The storage server's target: its first and its last namespace.
+      - name: server-nvmeof-first
+        cmd: >-
+          storage-test-lba.sh server-nvmeof-first
+          {{ storage_setup_target_devices | first | quote }} 16
+      - name: server-nvmeof-last
+        cmd: >-
+          storage-test-lba.sh server-nvmeof-last
+          {{ storage_setup_target_devices | last | quote }} 16 64
+
+# The mount has to be NFS and over RDMA: a write to the directory under a
+# mount that did not happen would pass.
+# The mount has to be NFS and over RDMA: a write to the directory under a
+# mount that did not happen would pass.
+- name: Check the NFS mount is over RDMA
+  ansible.builtin.shell:
+    cmd: |
+      opts=$(findmnt -n -o OPTIONS -T {{ storage_setup_nfs_mount | quote }})
+      case ",$opts," in
+          *,proto=rdma,*) echo rdma ;;
+          *) echo "not over RDMA: $opts" ;;
+      esac
+    executable: /bin/sh
+  register: storage_setup_nfs_proto
+  changed_when: false
+
+- name: Write and read back a file on the NFS mount
+  ansible.builtin.script:
+    cmd: >-
+      storage-test-file.sh nfs-rdma
+      {{ storage_setup_nfs_mount | quote }} 32
+      {{ 'nfs4' if storage_setup_nfs_proto.stdout | trim == 'rdma'
+         else 'nfs4-over-rdma' }}
+  register: storage_setup_run_nfs
+  changed_when: false
+  failed_when: false
+  timeout: 300
+
+# The S3 store inside the NIC answers plain HTTP for its control plane.
+- name: List the S3 store's bucket over HTTP
+  ansible.builtin.shell:
+    cmd: |
+      url=http://{{ storage_setup_s3_endpoint }}/{{ storage_setup_s3_bucket }}/
+      body=$(curl -s --max-time 20 "$url") || {
+          echo "storage s3-http: FAIL: $url did not answer" >&2; exit 1; }
+      case "$body" in
+          *ListBucketResult*) echo "storage s3-http: ok, $url lists the bucket" ;;
+          *) printf 'storage s3-http: FAIL: %s answered without a bucket listing: %.200s\n' "$url" "$body" >&2
+             exit 1 ;;
+      esac
+    executable: /bin/sh
+  register: storage_setup_run_s3
+  changed_when: false
+  failed_when: false
+
+# hipObject, as the login user: an object put to the store over RDMA and
+# got back, from host memory and from GPU memory.
+- name: Run hipObject against the S3 store
+  become: false
+  ansible.builtin.script:
+    cmd: >-
+      storage-test-hipobject.sh hipobject-s3-{{ item }}
+      {{ storage_setup_hipobject_program | quote }}
+      {{ storage_setup_s3_endpoint | quote }}
+      {{ storage_setup_s3_rdma_device | quote }}
+      {{ storage_setup_hipobject_bytes | string | quote }}
+      {{ 'nogpu' if item == 'host' else 'gpu' }}
+  register: storage_setup_run_hipobject
+  changed_when: false
+  failed_when: false
+  timeout: 300
+  loop:
+    - host
+    - gpu
+
+# hipFile: a file read into GPU memory and checked, from each kind of
+# storage the client has. Each read has to take the direct path: the script
+# refuses hipFile's fallback to a host bounce buffer, so one that cannot go
+# direct fails and does not quietly pass. After the raw tests above, because these make
+# filesystems on two of the namespaces those wrote.
+- name: Read through hipFile from the local drive, the server's target and its export
+  vars:
+    storage_setup_hipfile_filesystems:
+      - device: >-
+          {{ (storage_setup_client_drives.stdout_lines | select | list
+              + ['/dev/no-local-nvme']) | first | trim }}
+        mount: "{{ storage_setup_hipfile_local_mount }}"
+      # The second namespace: the raw tests wrote the first and the last.
+      - device: "{{ storage_setup_target_devices[1] }}"
+        mount: "{{ storage_setup_hipfile_nvmeof_mount }}"
+  block:
+    - name: Find the ROCm tree that has the hipFile SDK
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          given={{ storage_setup_rocm_path | quote }}
+          for root in "$given" "$(dirname "$(readlink -f "$given/bin")")"; do
+              if [ -e "$root/lib/libhipfile.so" ] && [ -x "$root/bin/hipcc" ]; then
+                  echo "$root"
+                  exit 0
+              fi
+          done
+          echo "no hipFile SDK and hipcc under $given: the guest image has both" >&2
+          exit 1
+        executable: /bin/sh
+      register: storage_setup_rocm
+      changed_when: false
+
+    - name: Make a scratch directory for the bench
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: storage-hipfile.
+      register: storage_setup_hipfile_work
+
+    - name: Let the login user run what is built there
+      ansible.builtin.file:
+        path: "{{ storage_setup_hipfile_work.path }}"
+        mode: "0755"
+
+    - name: Copy the bench's source to the guest
+      ansible.builtin.copy:
+        src: "{{ role_path }}/../rocjitsu_setup/files/gemm-hipfile-bench.hip"
+        dest: "{{ storage_setup_hipfile_work.path }}/gemm-hipfile-bench.hip"
+        mode: "0644"
+
+    # -O2 is not optional: without it the kernel needs a scratch segment,
+    # which the bench refuses to run with.
+    - name: Compile the bench
+      ansible.builtin.command:
+        argv:
+          - timeout
+          - "600"
+          - "{{ storage_setup_rocm.stdout | trim }}/bin/hipcc"
+          - -O2
+          - "--offload-arch={{ storage_setup_rocm_arch }}"
+          - "-I{{ storage_setup_rocm.stdout | trim }}/include"
+          - "-I{{ storage_setup_rocm.stdout | trim }}/include/hipfile"
+          - -o
+          - "{{ storage_setup_hipfile_work.path }}/gemm-hipfile-bench"
+          - "{{ storage_setup_hipfile_work.path }}/gemm-hipfile-bench.hip"
+          - "-L{{ storage_setup_rocm.stdout | trim }}/lib"
+          - -lhipfile
+          - "-Wl,-rpath,{{ storage_setup_rocm.stdout | trim }}/lib"
+      changed_when: true
+
+    # largefile4 and noinit_itable for the reason the server's export has
+    # them: these are sparse 8 TiB drives.
+    - name: Make and mount a filesystem on the local drive and on one of the server's namespaces
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          dev={{ item.device | quote }}
+          dir={{ item.mount | quote }}
+          mkdir -p "$dir"
+          if findmnt -n "$dir" >/dev/null; then umount "$dir"; fi
+          mkfs.ext4 -q -F -T largefile4 \
+              -E lazy_itable_init=1,lazy_journal_init=1,nodiscard "$dev"
+          mount -o noatime,noinit_itable "$dev" "$dir"
+          chmod 1777 "$dir"
+        executable: /bin/sh
+      changed_when: true
+      timeout: 600
+      loop: "{{ storage_setup_hipfile_filesystems }}"
+      loop_control:
+        label: "{{ item.mount }}"
+
+    - name: Make a directory for the bench on the NFS mount
+      ansible.builtin.file:
+        path: "{{ storage_setup_nfs_mount }}/hipfile"
+        state: directory
+        mode: "1777"
+
+    # As the login user. NFS is not a filesystem hipFile lists as
+    # supported, so its direct path is allowed by name: without the variable
+    # that read falls back, and with the fallback refused it fails.
+    - name: Run the hipFile tests
+      become: false
+      ansible.builtin.script:
+        cmd: >-
+          storage-test-hipfile.sh {{ item.name }}
+          {{ (storage_setup_hipfile_work.path ~ '/gemm-hipfile-bench') | quote }}
+          {{ item.dir | quote }} {{ item.env | default('') }}
+      register: storage_setup_run_hipfile
+      changed_when: false
+      failed_when: false
+      timeout: 400
+      loop:
+        - name: hipfile-local-nvme
+          dir: "{{ storage_setup_hipfile_local_mount }}"
+        - name: hipfile-server-nvmeof
+          dir: "{{ storage_setup_hipfile_nvmeof_mount }}"
+        - name: hipfile-nfs-rdma
+          dir: "{{ storage_setup_nfs_mount }}/hipfile"
+          env: HIPFILE_UNSUPPORTED_FILE_SYSTEMS=true
+      loop_control:
+        label: "{{ item.name }}"
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ storage_setup_hipfile_work.path | default('/nonexistent-storage-hipfile') }}"
+        state: absent
+
+    - name: Unmount the two filesystems
+      ansible.builtin.shell:
+        cmd: |
+          for dir in {{ storage_setup_hipfile_local_mount | quote }} \
+                     {{ storage_setup_hipfile_nvmeof_mount | quote }}; do
+              if findmnt -n "$dir" >/dev/null; then umount "$dir" || exit 1; fi
+          done
+        executable: /bin/sh
+      changed_when: false
+
+# From both streams: the script module runs a script on a terminal, where
+# what it wrote to stderr arrives with its stdout.
+- name: Collect what every test said
+  ansible.builtin.set_fact:
+    storage_setup_results: >-
+      {{ (storage_setup_ran
+          | map(attribute='stdout_lines', default=[]) | flatten
+          + storage_setup_ran
+          | map(attribute='stderr_lines', default=[]) | flatten)
+         | map('trim')
+         | select('match', '^storage [a-z0-9-]+: (ok|FAIL)') | list }}
+    # A test that ended without its line still counts: by its exit status.
+    storage_setup_failed: >-
+      {{ storage_setup_ran | rejectattr('rc', 'equalto', 0) | list | length }}
+    storage_setup_ran_count: "{{ storage_setup_ran | length }}"
+  vars:
+    storage_setup_ran: >-
+      {{ storage_setup_run_block.results
+         + [storage_setup_run_nfs, storage_setup_run_s3]
+         + storage_setup_run_hipobject.results
+         + (storage_setup_run_hipfile.results | default([])) }}

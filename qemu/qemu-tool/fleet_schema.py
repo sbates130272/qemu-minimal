@@ -222,13 +222,18 @@ _VENDOR_CHAR = "[ -+.-~\\-]"
 # strips, takes a sign and takes single underscores between digits. port:
 # ports.parse_ssh_port. addr: ports.publish_address. args: split_args(),
 # of which a grammar can say the characters and not the quoting.
+_INT_BODY = f"[+\\-]?{_DIGIT}+(_{_DIGIT}+)*"
+
 KIND_PATTERNS: dict[str, str | None] = {
     "str": None,
     "expand": None,
     "args": f"[^{_class_body(_ARGS_REFUSED)}]*",
     "bool": "|".join(
         _any_case(word) for word in ("true", "1", "yes", "false", "0", "no")),
-    "int": _stripped(f"[+\\-]?{_DIGIT}+(_{_DIGIT}+)*"),
+    "int": _stripped(_INT_BODY),
+    # _convert splits on commas and hands each part to int(), which strips
+    # it: the int form, once or more, with a comma between.
+    "ints": f"{_stripped(_INT_BODY)}(,{_stripped(_INT_BODY)})*",
     "port": _stripped(f"{_any_case('auto')}|{_PORT_NUMBER}"),
     "addr": _stripped(
         f"({_IPV4}|{_IPV6}|\\[({_IPV4}|{_IPV6})\\])?"),
@@ -284,6 +289,16 @@ KIND_HELP: dict[str, tuple[str, str, str]] = {
         "is told otherwise) passes the schema and not the parser. An "
         "integer with thousands of underscores can stop a Java validator; "
         "see [below](#what-the-schema-cannot-check)."),
+    "ints": (
+        "integer for each guest",
+        "One integer, which every guest gets, or integers separated by "
+        "commas, one for each guest in order. Each is what Python's `int()` "
+        "takes, as for an integer, white space round it included. An empty "
+        "element and an empty item are errors. That a list has exactly "
+        "`<vm-count>` items is the generator's to check, not the parser's.",
+        "The integer form, once or more, with commas between. The count of "
+        "items is not checked, and what the integer form lets through is "
+        "let through here."),
     "port": (
         "port",
         "A port number from 1 to 65535 in ASCII digits, or the word `auto` "
@@ -332,6 +347,8 @@ def _default_text(setting: fx._Setting) -> str:
     value = _DEFAULTS[setting.field]
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, tuple):
+        return ",".join(str(v) for v in value)
     return str(value)
 
 
@@ -503,6 +520,7 @@ def _rng_server(out: _Rng, kind: str) -> None:
     out.value(kind)
     out.close("attribute")
     out.line('<ref name="server.id"/>')
+    out.line('<optional><ref name="server.vm"/></optional>')
     children = _server_children(kind)
     if children:
         _rng_interleave(out, [
@@ -587,6 +605,13 @@ def render_rng() -> str:
     out.open('attribute name="id"')
     out.doc(_doc(*fx.DEVICES_HELP["server@id"]))
     out.pattern(_xsd_regex(fx._SERVER_ID.pattern))
+    out.close("attribute")
+    out.close("define")
+
+    out.open('define name="server.vm"')
+    out.open('attribute name="vm"')
+    out.doc(_doc(*fx.DEVICES_HELP["server@vm"]))
+    out.pattern(fx.SERVER_VM_FORM)
     out.close("attribute")
     out.close("define")
 
@@ -968,6 +993,10 @@ def render_xsd() -> str:
     out.doc(_doc(*fx.DEVICES_HELP["server@id"]))
     out.simple(_xsd_regex(fx._SERVER_ID.pattern))
     out.close("xs:attribute")
+    out.open('xs:attribute name="vm"')
+    out.doc(_doc(*fx.DEVICES_HELP["server@vm"]))
+    out.simple(fx.SERVER_VM_FORM)
+    out.close("xs:attribute")
     out.close("xs:complexType")
     out.close("xs:element")
     out.close("xs:sequence")
@@ -1156,11 +1185,13 @@ def render_markdown() -> str:
 
     para("## The devices block")
     para(
-        f"`<{fx._DEVICES}>` lists the vfio-user servers every guest gets, "
+        f"`<{fx._DEVICES}>` lists the vfio-user servers a guest gets, "
         "one `<server>`",
         "entry each. It exists so that two servers of one type can differ, "
-        "and so that",
-        "a NIC can be given an RDMA backend.")
+        "so that",
+        "a NIC can be given an RDMA backend, and, with the `vm` attribute, "
+        "so that the",
+        "guests of one fleet can differ.")
     para(
         "```xml",
         "<devices>",
@@ -1182,7 +1213,8 @@ def render_markdown() -> str:
          for label, key in (
              (f"<{fx._DEVICES}>", "devices"), ("<server>", "server"),
              ("<server type=...>", "server@type"),
-             ("<server id=...>", "server@id"))]))
+             ("<server id=...>", "server@id"),
+             ("<server vm=...>", "server@vm"))]))
     add("")
     para(
         "The children of a `<server>` depend on its type. They may come in "
@@ -1530,6 +1562,9 @@ def render_markdown() -> str:
         "  for every guest, or a comma list of exactly `<vm-count>` "
         "values. Any other",
         "  length is an error;",
+        "- `<vm-vcpus>`, `<vm-vmem>` and `<vm-nvme>` take one integer for "
+        "every guest,",
+        "  or exactly `<vm-count>` of them, the same way;",
         "- `<vm-extra-hostfwd>` is the exception: its commas are several "
         "rules for one",
         "  guest, and the whole value goes to every guest.")
@@ -1542,6 +1577,19 @@ def render_markdown() -> str:
         "  at least 1, or a `<devices>` block with at least one `ernic` "
         "and one",
         "  `rocjitsu` server;",
+        "- `<vm-roles>` with exactly `<vm-count>` roles, each lower-case "
+        "letters and",
+        "  digits and not the word `all`;",
+        "- a `vm` attribute on a `<server>` that names no guest above "
+        "`<vm-count>` and",
+        "  no role `<vm-roles>` lacks, does not mix `all` with anything "
+        "else,",
+        "  leaves every guest at least one `ernic` server, and is not used "
+        "together",
+        "  with `<vm-pcie-switch-width>`;",
+        "- `<vm-nvme-size>` a whole number and `K`, `M`, `G` or `T`, on a "
+        "fleet where",
+        "  a guest has an NVMe on a scratch file;",
         "- at most one `spdk` server a guest, and `<spdk-image>` set when "
         "there is one;",
         "- `<sdxi-image>` set when a guest has an SDXI device;",

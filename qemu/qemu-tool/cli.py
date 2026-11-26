@@ -336,6 +336,7 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "qemu-tool quick-start preflight        # check this host, touch nothing",
             "qemu-tool quick-start                  # pull, boot, configure, test",
             "qemu-tool quick-start --flavor helios up",
+            "qemu-tool quick-start --flavor storage     # two guests, every storage path",
             "qemu-tool quick-start --xml qemu/stacks/rocm-golden.xml \\",
             "    --xml my-overlay.xml up",
             "qemu-tool quick-start --sdxi-test --p4-test test",
@@ -376,7 +377,14 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
             "on the loopback backend, one serving NVMe-oF), an NVMe behind "
             "pci-mmio-bridge and an SPDK NVMe-KV controller; --xio-test "
             "installs rocm-xio in it, and --vfu-doorbell adds the "
-            "vfu-doorbell rig."
+            "vfu-doorbell rig. storage: 2 guests that differ, a GPU client "
+            "(a gfx1250 GPU, SDXI, an NVMe, an SPDK NVMe-KV controller and "
+            "three rocm-ernic NICs: the mesh, an S3-over-RDMA store and an "
+            "NVMe-oF target) and a "
+            "storage server (a NIC, SDXI and 24 NVMe drives of 8 TiB); "
+            "`test` installs hipObject on the client, makes the server an "
+            "NVMe-oF target and an NFS-over-RDMA server, and tests every "
+            "path between them."
         ),
     )
     g.add_argument(
@@ -908,6 +916,14 @@ def _add_run_vm(
              "is not converted: a partition table made at one size is not "
              "found at the other, and XFS made at 512 does not mount at "
              "4096.",
+    )
+    g.add_argument(
+        "--nvme-size", default=_UNSET, metavar="SIZE",
+        help="Size of each scratch qcow2 created for --nvme N: a whole "
+             "number and K, M, G or T, such as 8T. Default: <vm-nvme-size>, "
+             "else 1024G. The file is sparse, so this is what the guest "
+             "sees. A scratch file that already exists keeps its size; "
+             "--nvme-recreate makes it again.",
     )
     g.add_argument("--nvme-trace", default=_UNSET,
                    metavar="{doorbell,all,EVENT}",
@@ -2007,6 +2023,7 @@ def _extract_cli_overrides(
         _take("nvme_trace_file", "nvme_trace_file")
         _take("nvme_lbaf_mask", "nvme_lbaf_mask")
         _take("nvme_block_size", "nvme_block_size")
+        _take("nvme_size", "nvme_size")
         _take("nvme_recreate", "nvme_recreate")
         _take("nvme_dbbuf_poll_ns", "nvme_dbbuf_poll_ns")
         _take("nvme_dbbuf_poll_eventidx", "nvme_dbbuf_poll_eventidx")

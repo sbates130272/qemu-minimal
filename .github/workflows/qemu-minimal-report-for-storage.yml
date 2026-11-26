@@ -1,0 +1,246 @@
+name: qemu-minimal - Report for storage
+
+# Boots the storage stack, runs every storage test, and uploads a report
+# and the rates the README's badges track.
+#
+# One stack, described by one file: qemu/stacks/storage.xml. A GPU client
+# and a storage server from the published rocm-golden qcow2. `qemu-tool
+# quick-start --flavor storage` is what turns it into running guests and
+# `test` is what configures and tests them, so this is the daily run of the
+# command the README names: it makes the server an NVMe-oF target and an
+# NFS-over-RDMA server, builds hipObject on the client, and writes, reads
+# back and compares data over each path.
+#
+#   artifact         holds
+#   perf-storage     badge-storage-*.json: the tracked rates
+#   report-storage   storage-report.md, and what each client's tests said
+#
+# publish-pages fetches perf-storage BY NAME, so that name must keep being
+# uploaded or its metrics freeze at their last value. A badge is written
+# only for a test that passed and reported a rate.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'qemu/stacks/storage.xml'
+      - 'ansible/playbooks/vm-storage.yml'
+      - 'ansible/playbooks/roles/storage_setup/**'
+      - 'ansible/playbooks/roles/hipobject_setup/**'
+      - 'ansible/playbooks/roles/rocjitsu_setup/**'
+      - 'ansible/playbooks/roles/rocm_xio_setup/tasks/nvmeof.yml'
+      - 'ansible/requirements.yml'
+      - 'qemu/qemu-tool/**'
+      - 'qemu/pyproject.toml'
+      - 'scripts/storage-report.py'
+      - 'scripts/check-guest-exporters.py'
+      - '.github/actions/nonroot-user/action.yml'
+      - '.github/workflows/qemu-minimal-report-for-storage.yml'
+  # Daily at 02:00 MST, an hour after the rocm-golden report.
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-storage
+  cancel-in-progress: true
+
+env:
+  FLEET_FILE: qemu/stacks/storage.xml
+  # The compose project name is this directory's basename: storage.
+  STACK_DIR: /var/lib/qemu-tool/stacks/storage
+  KEY_DIR: /var/lib/qemu-tool/storage-key
+
+jobs:
+  storage:
+    name: Test and report storage
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      # The one image ref that cannot come from the XML: GitHub resolves it
+      # before any step can read a file. Keep it on the fleet's qemu-ref.
+      image: docker.io/sbates130272/batesste-ci-images-ubuntu-qemu-libvfio-user-sbates-fork:20261112.gdca6903-qemu.4cb9698-vfu.3719c3a
+      # /var/lib/qemu-tool is bind-mounted from the host at the same path so
+      # the qcow2 pulled in here is the file the sibling qemu containers open:
+      # compose bind mounts are resolved by the host docker daemon.
+      options: >-
+        --device /dev/kvm
+        --pid=host
+        -v /var/run/docker.sock:/var/run/docker.sock
+        -v /var/lib/qemu-tool:/var/lib/qemu-tool
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v7
+
+    # A root caller resolves CONTAINER_USER to 0:0, which is not the
+    # configuration an operator has. See the action.
+    - name: Run the stack as a non-root user
+      uses: ./.github/actions/nonroot-user
+      with:
+        chown: >-
+          /var/lib/qemu-tool
+          /var/lib/qemu-tool/images
+          /var/lib/qemu-tool/stacks
+          $GITHUB_WORKSPACE
+
+    # The published qcow2 is large and decompresses to about the same again.
+    # The 25 NVMe drives are sparse and cost what the tests write.
+    - name: Free disk space
+      run: |
+        df -h /
+        rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+        docker image prune -af || true
+        df -h /
+
+    # --force and PIPX_BIN_DIR, because the CI image already ships a qemu-tool
+    # at /usr/local/bin that wins on PATH. Assert it rather than trust it.
+    - name: Install qemu-tool
+      run: |
+        set -eu
+        PIPX_BIN_DIR=/usr/local/bin pipx install --force ./qemu
+        RESOLVED=$(readlink -f "$(command -v qemu-tool)")
+        echo "qemu-tool resolves to: $RESOLVED"
+        case "$RESOLVED" in
+          /opt/qemu-tool/*)
+            echo "::error::the image's qemu-tool is shadowing the one just installed"
+            exit 1
+            ;;
+        esac
+        qemu-tool quick-start --flavor storage --help >/dev/null
+
+    - name: Install collections
+      run: ansible-galaxy collection install --no-deps -r ansible/requirements.yml
+
+    - name: Fetch the guest image and bring the stack up
+      run: |
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" \
+          qemu-tool quick-start up \
+            --flavor storage \
+            --stack-dir "$STACK_DIR" \
+            --key-dir "$KEY_DIR" \
+            --in-network \
+            --yes
+
+    # The guests are published on HOST ports, which this job container cannot
+    # reach. Join the fleet network and address the guests on it instead.
+    - name: Join the fleet network
+      run: docker network connect storage_fleet "$(cat /etc/hostname)"
+
+    # Sets the server up, builds hipObject on the client, connects the client
+    # to every store and runs every test. A failed test fails this step and
+    # still leaves what each test said, which the report below is made from.
+    - name: Configure the guests and run the storage tests
+      id: storage-test
+      continue-on-error: true
+      run: |
+        setpriv --reuid "$CIUSER_UID" --regid "$CIUSER_UID" --init-groups \
+          env HOME="$CIUSER_HOME" \
+          qemu-tool quick-start test \
+            --flavor storage \
+            --stack-dir "$STACK_DIR" \
+            --key-dir "$KEY_DIR" \
+            --in-network \
+            --yes
+
+    - name: Write the report and the badges
+      id: storage-report
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -uo pipefail
+        mkdir -p perf-out/storage report-out
+        rc=0
+        python3 -I scripts/storage-report.py \
+          "${STACK_DIR}/artifacts" perf-out/storage || rc=$?
+        if [ -f perf-out/storage/storage-report.md ]; then
+          mv perf-out/storage/storage-report.md report-out/
+          cat report-out/storage-report.md >> "$GITHUB_STEP_SUMMARY"
+        fi
+        cp "${STACK_DIR}"/artifacts/storage-*.md report-out/ 2>/dev/null || true
+        ls -l perf-out/storage report-out
+        exit "$rc"
+
+    - name: Upload the tracked rates
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: perf-storage
+        path: perf-out/storage/badge-*.json
+        if-no-files-found: warn
+
+    - name: Upload the report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: report-storage
+        path: report-out/
+        if-no-files-found: warn
+
+    # Both guests run node_exporter, whose NFS collectors are where the NFS
+    # client's and server's statistics come from. Every TCP port the fleet
+    # file forwards is asked for by name, with up == 1.
+    - name: Check the guest exporters Prometheus scrapes
+      if: ${{ !cancelled() && steps.storage-test.outcome != 'skipped' }}
+      shell: bash
+      run: |
+        set -uo pipefail
+        addr_of() {
+          docker inspect \
+            -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"
+        }
+        guest1=$(addr_of storage-qemu-1-1)
+        guest2=$(addr_of storage-qemu-2-1)
+        for attempt in 1 2 3 4 5 6 7 8; do
+          if out=$(docker exec storage-prometheus-1 \
+                     wget -q -O- 'http://127.0.0.1:9090/api/v1/query?query=up' |
+                   python3 -I scripts/check-guest-exporters.py \
+                     --xml "$FLEET_FILE" \
+                     --guest "$guest1" --guest "$guest2" 2>&1); then
+            echo "$out"
+            exit 0
+          fi
+          echo "attempt ${attempt}: $(echo "$out" | tail -1)"
+          sleep 15
+        done
+        echo "$out"
+        echo "::error::$(echo "$out" | tail -1)"
+        exit 1
+
+    - name: Show logs on failure
+      if: failure() || steps.storage-test.outcome == 'failure'
+      run: |
+        qemu-tool compose --stack-dir "$STACK_DIR" logs --tail 200 || true
+
+    - name: Take the stack down
+      if: always()
+      run: |
+        qemu-tool quick-start down \
+          --flavor storage \
+          --stack-dir "$STACK_DIR" \
+          --yes || true
+
+    # continue-on-error above keeps the job green, so fail it explicitly:
+    # otherwise a failed test looks like a clean run. publish-pages runs on
+    # any non-skipped conclusion and resolves the artifact by name, so a red
+    # job here does not suppress the rates that were measured.
+    - name: Fail if a storage test failed
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        rc=0
+        for pair in \
+          "tests:${{ steps.storage-test.outcome }}" \
+          "report:${{ steps.storage-report.outcome }}"
+        do
+          if [ "${pair#*:}" != "success" ]; then
+            echo "::error::storage ${pair%%:*} failed (${pair#*:})"
+            rc=1
+          fi
+        done
+        exit "${rc}"

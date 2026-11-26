@@ -1,0 +1,41 @@
+---
+# hipObject, built in the guest from one pinned commit: the library, and
+# the minio-getput-rdma program that moves an object to an S3 store and
+# back over RDMA and compares it.
+
+# What is fetched, and the commit it has to be. A branch is a name for
+# whatever was pushed last, so the two are pinned together: a branch that
+# has moved fails the run, naming both commits, before anything is built.
+# An empty commit turns the check off, and nothing else does.
+hipobject_setup_repo: https://github.com/ROCm/hipObject.git
+hipobject_setup_ref: develop
+hipobject_setup_commit: 612d86f241ae3fa63625d42ecaa36418bef2962b  # develop
+
+# The ROCm tree, or a path whose bin/ links into it.
+hipobject_setup_rocm_path: /opt/rocm
+
+# Where it is installed. A prefix of its own, on no PATH: nothing else in
+# the image is shadowed by it.
+hipobject_setup_prefix: /opt/hipobject
+# The checkout and its build directory, kept: the test program is built
+# there and installed from it.
+hipobject_setup_source_dir: /usr/local/src/hipobject
+# The record of what was built.
+hipobject_setup_stamp: /etc/hipobject.json
+
+# Build even when the stamp says there is nothing to do.
+hipobject_setup_force: false
+# Compile jobs; 0 is one per processor, at most 8.
+hipobject_setup_jobs: 0
+
+# No rdma-core development package: hipObject loads libibverbs with
+# dlopen, and a golden guest must not be given the archive's headers.
+hipobject_setup_packages:
+  - build-essential
+  - cmake
+  - git
+  - libcurl4-openssl-dev
+  - libssl-dev
+  - ninja-build
+  - pkg-config
+  - zlib1g-dev

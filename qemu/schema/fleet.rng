@@ -27,6 +27,12 @@
             </element>
           </optional>
           <optional>
+            <element name="vm-roles">
+              <a:documentation>One role for each guest, for a fleet whose guests differ: part of each guest's name and an inventory group. a comma list of exactly vm-count roles, such as client,server or client,client,server; a role is lower-case letters and digits, starting with a letter, and not the word all. Guests are then named &lt;prefix&gt;-&lt;role&gt;-K, K counting the guests of that role from 1; a &lt;server&gt; may name a role in its vm attribute; and the generated inventory has a group fleet_&lt;role&gt; for each. Empty or unset: no roles, and guests are &lt;prefix&gt;-N.</a:documentation>
+              <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
             <element name="vm-name-prefix">
               <a:documentation>Prefix of every guest's name; guest N is &lt;prefix&gt;-N, the name run-vm passes on for the guest's hostname. String, default qemu-fleet. gen-compose takes the default for an empty element; quick-start does not, and looks for guests named -1, -2. Names run from &lt;prefix&gt;-1. The guest lower-cases it and turns characters outside a-z, 0-9 and - into hyphens for its hostname.</a:documentation>
               <ref name="kind.str"/>
@@ -178,14 +184,14 @@
           </optional>
           <optional>
             <element name="vm-vcpus">
-              <a:documentation>vCPUs per guest; keep it at 4 or more on an ernic stack, and vCPUs times guests near the host's core count. integer; 0 or unset leaves run-vm's default of 2; qemu-tool check FAILs a value set from 1 to 3 and does not check 0 or unset; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4, ceiling 8).</a:documentation>
-              <ref name="kind.int"/>
+              <a:documentation>vCPUs per guest; keep it at 4 or more on an ernic stack, and vCPUs times guests near the host's core count. integer, or a comma list of exactly vm-count of them, one for each guest; 0 or unset leaves run-vm's default of 2; run-vm --xml outside a stack ignores a list; qemu-tool check FAILs a value set from 1 to 3 and does not check 0 or unset; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4, ceiling 8).</a:documentation>
+              <ref name="kind.ints"/>
             </element>
           </optional>
           <optional>
             <element name="vm-vmem">
-              <a:documentation>Guest memory per VM. MiB (4096 is 4 GiB); 0 or unset leaves run-vm's default of 4096; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4096, ceiling 8192).</a:documentation>
-              <ref name="kind.int"/>
+              <a:documentation>Guest memory per VM. MiB (4096 is 4 GiB), or a comma list of exactly vm-count values, one for each guest; 0 or unset leaves run-vm's default of 4096; run-vm --xml outside a stack ignores a list; quick-start by default (not with --no-size-from-host) replaces it with a host-derived value (floor 4096, ceiling 8192).</a:documentation>
+              <ref name="kind.ints"/>
             </element>
           </optional>
           <optional>
@@ -196,8 +202,14 @@
           </optional>
           <optional>
             <element name="vm-nvme">
-              <a:documentation>Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer; N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null_blk); default 0.</a:documentation>
-              <ref name="kind.int"/>
+              <a:documentation>Number of emulated NVMe scratch devices per guest; run-vm creates a qcow2 for each. 0 gives none. integer, or a comma list of exactly vm-count of them, one for each guest (0,24 gives the second guest 24); N &gt; 0 is N devices on scratch qcow2 files; -N is N devices on the host's /dev/nullb0.. (null_blk); default 0; run-vm --xml outside a stack ignores a list.</a:documentation>
+              <ref name="kind.ints"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-nvme-size">
+              <a:documentation>Size of each scratch qcow2 run-vm creates for an emulated NVMe device, as the guest sees it. a whole number and K, M, G or T, such as 8T; empty or unset is run-vm's 1024G, which renders nothing. The suffixes are binary (8T is 8 TiB) and the file is sparse, so the host gives up only what a guest writes; refused with no guest that has an NVMe on a qcow2. A scratch file that already exists keeps its size.</a:documentation>
+              <ref name="kind.str"/>
             </element>
           </optional>
           <optional>
@@ -509,6 +521,12 @@
       <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([+\-]?[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+(_[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+)*)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*</param>
     </data>
   </define>
+  <define name="kind.ints">
+    <a:documentation>integer for each guest: One integer, which every guest gets, or integers separated by commas, one for each guest in order. Each is what Python's int() takes, as for an integer, white space round it included. An empty element and an empty item are errors. That a list has exactly &lt;vm-count&gt; items is the generator's to check, not the parser's.</a:documentation>
+    <data type="string">
+      <param name="pattern">[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([+\-]?[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+(_[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+)*)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*(,[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*([+\-]?[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+(_[^&#x9;-/:-&#x7F;&#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]+)*)[\t\n\r &#x85;&#xA0;&#x1680;&#x2000;-&#x200A;&#x2028;&#x2029;&#x202F;&#x205F;&#x3000;]*)*</param>
+    </data>
+  </define>
   <define name="kind.port">
     <a:documentation>port: A port number from 1 to 65535 in ASCII digits, or the word auto in any case; white space round it is ignored.</a:documentation>
     <data type="string">
@@ -541,7 +559,7 @@
   </define>
   <define name="devices">
     <element name="devices">
-      <a:documentation>Lists the vfio-user servers every guest gets, one &lt;server&gt; each; replaces the three per-VM device counts. No attributes, no text; at least one &lt;server&gt;. Later layers merge entries by id, append new ids and cannot remove one. Every guest gets the same list.</a:documentation>
+      <a:documentation>Lists the vfio-user servers a guest gets, one &lt;server&gt; each; replaces the three per-VM device counts. No attributes, no text; at least one &lt;server&gt;. Later layers merge entries by id, append new ids and cannot remove one. Every guest gets the same list, less the entries whose vm attribute names other guests.</a:documentation>
       <mixed>
         <oneOrMore>
           <ref name="server"/>
@@ -551,13 +569,14 @@
   </define>
   <define name="server">
     <element name="server">
-      <a:documentation>One device server every guest gets; its children set that server's backend, config file or options. Requires type and id, and takes no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable. Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device, an SPDK NVMe controller or a vfu-doorbell ringee or ringer. ernic, rocjitsu, sdxi, spdk, vfu-ringee or vfu-ringer. The generator refuses more than one spdk, vfu-ringee or vfu-ringer a guest, an spdk with no &lt;spdk-image&gt;, and a vfu-ringee or vfu-ringer with no &lt;doorbell-image&gt;. An id cannot change type in a later layer.</a:documentation>
+      <a:documentation>One device server; its children set its backend, config file or options, and its vm attribute the guests that get it. Requires type and id, takes vm, and no other attribute. Children allowed depend on type; each may appear once unless the option is repeatable. Kind of server: an ernic NIC, a rocjitsu GPU, an SDXI device, an SPDK NVMe controller or a vfu-doorbell ringee or ringer. ernic, rocjitsu, sdxi, spdk, vfu-ringee or vfu-ringer. The generator refuses more than one spdk, vfu-ringee or vfu-ringer a guest, an spdk with no &lt;spdk-image&gt;, and a vfu-ringee or vfu-ringer with no &lt;doorbell-image&gt;. An id cannot change type in a later layer.</a:documentation>
       <choice>
         <group>
           <attribute name="type">
             <value type="string">ernic</value>
           </attribute>
           <ref name="server.id"/>
+          <optional><ref name="server.vm"/></optional>
           <mixed>
             <interleave>
               <optional>
@@ -638,6 +657,7 @@
             <value type="string">rocjitsu</value>
           </attribute>
           <ref name="server.id"/>
+          <optional><ref name="server.vm"/></optional>
           <mixed>
             <interleave>
               <optional>
@@ -680,6 +700,7 @@
             <value type="string">sdxi</value>
           </attribute>
           <ref name="server.id"/>
+          <optional><ref name="server.vm"/></optional>
           <mixed>
             <zeroOrMore>
               <element name="verbose">
@@ -696,6 +717,7 @@
             <value type="string">spdk</value>
           </attribute>
           <ref name="server.id"/>
+          <optional><ref name="server.vm"/></optional>
           <mixed>
             <interleave>
               <optional>
@@ -730,6 +752,7 @@
             <value type="string">vfu-ringee</value>
           </attribute>
           <ref name="server.id"/>
+          <optional><ref name="server.vm"/></optional>
           <text/>
         </group>
         <group>
@@ -737,6 +760,7 @@
             <value type="string">vfu-ringer</value>
           </attribute>
           <ref name="server.id"/>
+          <optional><ref name="server.vm"/></optional>
           <text/>
         </group>
       </choice>
@@ -747,6 +771,14 @@
       <a:documentation>Names the entry for later layers to merge on and for error messages; does not rename containers or sockets. Starts with a letter; letters, digits, '_', '.' and '-'; 32 characters at most; unique in the block.</a:documentation>
       <data type="string">
         <param name="pattern">[A-Za-z][A-Za-z0-9_.\-]{0,31}</param>
+      </data>
+    </attribute>
+  </define>
+  <define name="server.vm">
+    <attribute name="vm">
+      <a:documentation>The guests that get this device, so that the guests of one fleet can differ; absent, every guest gets it. all, or guests separated by commas with no white space, each a number from 1 in ASCII digits or a role of vm-roles, every guest of which gets it: vm='1', vm='1,3' or vm='client'. The generator refuses a number above vm-count, a role vm-roles does not have, a guest left with no ernic, and a fleet with vm-pcie-switch-width whose guests differ. A later layer's entry with the same id replaces it; vm='all' widens it again.</a:documentation>
+      <data type="string">
+        <param name="pattern">([1-9][0-9]*|[a-z][a-z0-9]*)(,([1-9][0-9]*|[a-z][a-z0-9]*))*</param>
       </data>
     </attribute>
   </define>

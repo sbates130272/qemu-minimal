@@ -6,6 +6,108 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`quick-start --flavor storage`: a GPU client and a storage server, and
+  a test of every storage path between them.** A fifth stack,
+  `qemu/stacks/storage.xml`, of two guests that are not alike. The client
+  has a rocjitsu GPU, an SDXI device, one emulated NVMe and three rocm-ernic
+  NICs: one on the mesh, one whose server is an S3-over-RDMA object store,
+  and one whose server is an NVMe-oF target with a block and a Key Value
+  namespace. The server has one NIC on the mesh, an SDXI device, no GPU and
+  24 emulated NVMe drives of 8 TiB, which are sparse files. `test` needs no
+  switch: `vm-storage.yml` makes the server an NVMe-oF target over RDMA
+  (`nvmet-rdma`) serving the first eight drives and an NFS-over-RDMA server
+  exporting a filesystem on the next, builds
+  [hipObject](https://github.com/ROCm/hipObject) on the client at a pinned
+  commit under `/opt/hipobject`, connects the client to every store, and
+  writes, reads back and compares data over each path: the client's own
+  NVMe, the block and the Key Value namespace inside its NIC, the S3 store
+  over HTTP and over RDMA through hipObject from host and from GPU memory,
+  the server's first and last NVMe-oF namespace, and a file on the NFS
+  mount, and the Key Value namespace of an SPDK NVMe controller on PCIe.
+  Three more read a file into GPU memory through hipFile's direct path and
+  check it: from the client's own drive, from one of the server's NVMe-oF
+  namespaces, and from the NFS mount. They run with
+  `HIPFILE_ALLOW_COMPAT_MODE=false`, so a read that cannot go direct fails
+  where it would otherwise fall back to a bounce buffer in host memory and
+  pass; the NFS read also runs with `HIPFILE_UNSUPPORTED_FILE_SYSTEMS=true`,
+  without which hipFile refuses NFS the direct path. The guests are `storage-client-1` and `storage-server-1`.
+  Every test runs and leaves one line; the run fails at the end if
+  any failed, and a run that left no `storage:` result line is not a pass.
+  Two new roles, `hipobject_setup` and `storage_setup`. Neither installs an
+  rdma-core development package. The first `test` installs packages in both
+  guests and fetches hipObject and its dependencies from GitHub. The drives
+  are scratch and are written raw.
+
+- **The GEMM hipFile bench honours `HIPFILE_ALLOW_COMPAT_MODE=false`.** It
+  used to refuse to run with the variable set false. It now passes it on to
+  hipFile, which then fails a read it cannot do directly, and prints
+  `compat_allowed=no`. Unset, the bench still allows the fallback itself, so
+  its other callers (the daily report and `quick-start --hipfile-test`) are
+  unchanged.
+
+- **`report-for-storage`, a daily lane on main for the storage flavor.** It
+  runs `quick-start --flavor storage up` and `test`, writes a report of
+  every test with `scripts/storage-report.py`, and uploads it
+  (`report-storage`) with five tracked rates (`perf-storage`): the NVMe-oF
+  target in the NIC, the server's NVMe-oF target, NFS over RDMA, and hipFile
+  from the NVMe-oF namespace and from the NFS mount. The pages workflow
+  fetches the rates onto the performance page, and the README has a badge
+  for each and one for the lane. Each rate is a 16 or 32 MiB write and read
+  back, or a 32 MiB hipFile read, timed once a run, so expect them to move.
+  The lane has not run: nothing in it has been on a GitHub runner.
+
+- **NFS statistics from both storage guests, with no new exporter.**
+  node_exporter already exports the server's (`node_nfsd_*`) and the
+  client's (`node_nfs_*`); the storage test turns on the client's per-mount
+  collector, whose `node_mountstats_nfs_*` series say which transport a
+  mount is on.
+
+- **`<vm-roles>` gives each guest of a fleet a role**, one for each guest:
+  `client,server`, or `client,client,server` with `<vm-count>` of 3. Guests
+  are then named `<prefix>-<role>-K`, K counting the guests of that role
+  from 1; a `<server>` may name a role in its `vm` attribute
+  (`vm='client'`); and the generated inventory has a group `fleet_<role>`
+  for each role and `fleet_guest_role` on each host. With no `<vm-roles>`,
+  names and inventories are what they were.
+
+- **A `<server>` of a `<devices>` block takes a `vm` attribute naming the
+  guests that get the device**, so the guests of one fleet can differ:
+  `vm='1'`, `vm='1,3'`, `vm='client'` or `vm='all'`: numbers from 1, and
+  roles of `<vm-roles>`. Absent, every guest gets the device,
+  and a fleet with no `vm` attribute renders byte for byte as before. A
+  guest may then have no GPU, though each keeps at least one ernic and a
+  fleet at least one GPU. Device ordinals, addresses and MACs run on across
+  guests with no gap. A number above `<vm-count>` is refused, and so is `vm`
+  together with `<vm-pcie-switch-width>`. A later layer's entry with the
+  same id replaces the attribute, and `vm='all'` widens it again. When the
+  guests of a fleet differ, the generated inventory says what each has:
+  `fleet_guest_gpus`, `fleet_guest_sdxi`, `fleet_guest_nvme`, and each
+  NIC's `id` and `backend` in `fleet_guest_nics`. Both schemas and the
+  reference page carry the attribute.
+
+- **`<vm-nvme>`, `<vm-vcpus>` and `<vm-vmem>` take one integer for each
+  guest.** One value is every guest's, as before; a comma list of exactly
+  `<vm-count>` values applies by position, and any other length is an error
+  naming the element and both lengths. `<vm-nvme>1,24</vm-nvme>` gives the
+  first guest one drive and the second 24. A `run-vm --xml` outside a stack
+  ignores a list, since it cannot know which guest it is. With a list,
+  `<vm-nvme-vram>` reaches the guests that have both a drive and a GPU, and
+  `<vm-pci-mmio-bridge>` still wants a drive in every guest. The three
+  `FleetConfig` fields are tuples now; a `FleetConfig` built in code may
+  still be given one integer.
+
+- **`<vm-nvme-size>` and `run-vm --nvme-size` set the size of each scratch
+  NVMe drive.** A whole number and `K`, `M`, `G` or `T`, binary, so `8T` is
+  8 TiB. The default is still 1024G and renders nothing. The files are
+  sparse, and one that already exists keeps its size. Refused on a fleet
+  with no guest that has a drive on a qcow2.
+
+- **A NIC with a backend of its own gets no TAP.** With `<ernic-tap>` on,
+  the tapsetup sidecar, the `l2` network and `-T tap0` now go to the NICs on
+  the mesh only: guest Ethernet is for reaching other guests, and an `s3` or
+  `nvmeof` NIC talks to a store inside its own server. No committed stack
+  had both a TAP and a backend NIC, so none changed.
+
 - **`<xio-ref>` and `<xio-commit>` name the rocm-xio branch the xio guest
   installs.** They go into the generated inventory as the `rocm_xio_setup`
   role's own variables, so `quick-start --flavor xio --xio-test` builds that
@@ -275,8 +377,11 @@ All notable changes to this project will be documented in this file.
     the RELAX NG schema anywhere but on the documents listed as its
     looseness; it needs `lxml` or `xmllint`, skips without one and fails
     without one under `CI=true`. `Gen Compose Check` installs `lxml`.
-  - *Run:* the four shipped fleet files and 316 small documents through the
-    parser and both schemas with lxml, on libxml2 2.14.6 and on 2.15.2. By
+  - *Run:* the five shipped fleet files and 332 small documents through the
+    parser and both schemas with lxml, on libxml2 2.15.2; the four files and
+    316 documents there were before the storage stack and the sixteen
+    documents for the `vm` attribute and the per-guest lists, on 2.14.6 as
+    well. By
     hand, in a local container and in no workflow, on the 257 documents
     there were
     before the last three elements were removed: the same files and

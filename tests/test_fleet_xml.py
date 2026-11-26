@@ -72,7 +72,7 @@ class ParseDefault(unittest.TestCase):
         self.assertEqual(self.cfg.ernic_per_vm, 1)
         self.assertEqual(self.cfg.rocjitsu_per_vm, 1)
         self.assertEqual(self.cfg.sdxi_per_vm, 1)
-        self.assertEqual(self.cfg.vm_nvme, 1)
+        self.assertEqual(self.cfg.vm_nvme, (1,))
 
     def test_network(self) -> None:
         self.assertEqual(self.cfg.fleet_prefix, "172.31")
@@ -231,6 +231,7 @@ class SettingsTable(unittest.TestCase):
 
     def test_each_kind_matches_its_field_type(self) -> None:
         want = {int: {"int", "blocksize", "mtu"}, bool: {"bool"},
+                tuple: {"ints"},
                 str: {"str", "expand", "port", "addr", "args", "vendor"}}
         defaults = FleetConfig()
         for setting in fleet_xml._SETTINGS:

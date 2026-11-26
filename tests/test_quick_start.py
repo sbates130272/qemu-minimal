@@ -247,8 +247,8 @@ class SettingsFileTest(unittest.TestCase):
 
     def test_the_guests_start_at_the_floor(self):
         # What a run with --no-size-from-host gets, and the ionic_rdma floor.
-        self.assertEqual(self.fleet.vm_vcpus, qs._VCPU_FLOOR)
-        self.assertEqual(self.fleet.vm_vmem, qs._VMEM_FLOOR_MB)
+        self.assertEqual(self.fleet.vm_vcpus, (qs._VCPU_FLOOR,))
+        self.assertEqual(self.fleet.vm_vmem, (qs._VMEM_FLOOR_MB,))
 
     def test_it_is_what_quick_start_runs_by_default(self):
         self.assertEqual(qs._packaged_fleet(), ENV_FILE)
@@ -281,7 +281,8 @@ class SettingsFileTest(unittest.TestCase):
                          if p.name != "fleet.xml")
         self.assertEqual(shipped, on_disk)
         self.assertEqual(shipped,
-                         ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "xio.xml"])
+                         ["helios-tray.xml", "mi355x-server.xml", "rocm-golden.xml", "storage.xml",
+             "xio.xml"])
 
 
 class MovedGuestImageTest(unittest.TestCase):
@@ -622,7 +623,7 @@ class LayerTest(unittest.TestCase):
             state.base_layers = [ENV_FILE]
             qs._write_layer(state, "overlay-sized.xml",
                             {"vm-vcpus": "6", "vm-shm-size": "9216m"}, "t")
-            self.assertEqual(6, state.fleet.vm_vcpus)
+            self.assertEqual((6,), state.fleet.vm_vcpus)
             self.assertEqual("9216m", state.fleet.shm_size)
             # Everything the overlay does not name is still the base file's.
             self.assertTrue(state.fleet.ernic_tap)
@@ -810,6 +811,7 @@ class WorkflowWorkspaceTest(unittest.TestCase):
     def test_report_lanes_chown_the_container_workspace(self):
         workflows = (
             ".github/workflows/qemu-minimal-report-for-vm-rocm-golden.yml",
+            ".github/workflows/qemu-minimal-report-for-storage.yml",
         )
         for name in workflows:
             with self.subTest(workflow=name):

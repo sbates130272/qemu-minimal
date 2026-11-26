@@ -1,0 +1,2518 @@
+{
+  "__inputs": [],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "bargauge",
+      "name": "Bar gauge",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "row",
+      "name": "Row",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "description": "Quick Start overview: guests, CPU, memory, GPU, NVMe, hipFile, SDXI, P4 and RDMA/TCP mesh at a glance.",
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "title": "Fleet",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "none"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "Guests Up",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(up{job=\"fleet-node\"} == 1) or vector(0)",
+          "legendFormat": "up",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(up{job=\"fleet-node\"}) or vector(0)",
+          "legendFormat": "total",
+          "refId": "B",
+          "hide": true
+        }
+      ],
+      "description": "Number of VMs where node-exporter is reachable. Requires <vm-extra-hostfwd> tcp::9100-:9100 and prometheus-node-exporter running in the guest."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "ROCm Ernic Instances",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "ernic_instances",
+          "legendFormat": "instances",
+          "refId": "A"
+        }
+      ],
+      "description": "Number of ernic NIC instances registered with the rocm-ernic mesh manager, as reported by the ernic-stats-exporter."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "title": "RDMA Fleet Throughput",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_rdma_bytes_total[$__rate_interval]))",
+          "legendFormat": "RDMA",
+          "refId": "A"
+        }
+      ],
+      "description": "Fleet-total RDMA byte rate broken out by operation type: SEND, RECV, RDMA Read, RDMA Write. From ernic-stats-exporter."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "id": 5,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "title": "TCP Mesh Fleet Throughput",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_ip_bytes_total[$__rate_interval]))",
+          "legendFormat": "TCP",
+          "refId": "A"
+        }
+      ],
+      "description": "Total TCP/IP bytes per second over the ernic TAP network (fleet total TX + RX). This is the Ethernet layer beneath the RDMA mesh."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "id": 6,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "title": "GPU Up",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(amdgpu_devices_total{job=\"fleet-node\"} >= 1) or vector(0)",
+          "legendFormat": "Guests with a GPU bound",
+          "refId": "A"
+        }
+      ],
+      "description": "Number of guests with at least one GPU bound to the amdgpu driver, from amdgpu_devices_total, which each guest writes for node-exporter's textfile collector. 0 until amdgpu has been probed in the guest; `qemu-tool quick-start test` does that."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "id": 7,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "title": "SDXI Copy Throughput",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(sdxi_bytes_moved_total{job=\"fleet-node\",context=\"1\"}[2m]))",
+          "legendFormat": "SDXI copy",
+          "refId": "A"
+        }
+      ],
+      "description": "Fleet-total bytes per second copied by the guests' SDXI devices, from sdxi_bytes_moved_total, which each guest writes for node-exporter's textfile collector. The rate is taken over 2 minutes, eight of the guests' 15 s writes. No data on a fleet with no SDXI device. Zero while nothing is copying, which is most of the time: `quick-start test --sdxi-test` copies 4 MiB once on each guest, and that reads here as about 35 kB/s for two minutes."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 10,
+      "title": "Guests — CPU & Memory",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percent",
+          "min": 0,
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 11,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "CPU Busy % Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "100 - (avg by (vm_name) (rate(node_cpu_seconds_total{job=\"fleet-node\",mode=\"idle\",vm_name=~\"$vm\"}[$__rate_interval])) * 100)",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "CPU busy percentage per VM (100 − idle%), derived from node_cpu_seconds_total. Averaged across all vCPUs for each VM."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 13,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "System Load 1m Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "node_load1{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "1-minute load average (node_load1) per VM. A value above the vCPU count indicates CPU saturation."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "id": 12,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color"
+      },
+      "title": "Memory Used % Per VM",
+      "type": "bargauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "100 * (1 - (node_memory_MemAvailable_bytes{job=\"fleet-node\",vm_name=~\"$vm\"} / node_memory_MemTotal_bytes{job=\"fleet-node\",vm_name=~\"$vm\"}))",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Percentage of memory in use per VM: 100 × (1 − MemAvailable / MemTotal). Current snapshot, not a time series."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "id": 14,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "Memory Available Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "node_memory_MemAvailable_bytes{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}} avail",
+          "refId": "A"
+        }
+      ],
+      "description": "Bytes of memory available for new allocations (node_memory_MemAvailable_bytes) per VM over time."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 27,
+      "title": "NVMe Storage",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "id": 25,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "NVMe I/O Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(node_disk_read_bytes_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} read",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(node_disk_written_bytes_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} write",
+          "refId": "B"
+        }
+      ],
+      "description": "NVMe (nvme0n1) read and write throughput in bytes per second per VM, from node-exporter disk stats."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "iops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "id": 26,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "NVMe IOPS Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(node_disk_reads_completed_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} read IOPS",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(node_disk_writes_completed_total{job=\"fleet-node\",device=\"nvme0n1\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} write IOPS",
+          "refId": "B"
+        }
+      ],
+      "description": "NVMe (nvme0n1) read and write I/O operations per second per VM, from node-exporter."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 80,
+      "title": "hipFile — NVMe To GPU Memory",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps",
+          "noValue": "no test run"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 25
+      },
+      "id": 81,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "hipFile Read Rate (last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "quickstart_hipfile_read_bytes_per_second{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "What `qemu-tool quick-start test --hipfile-test` last measured on this guest: bytes per second read from a file on the NVMe namespace straight into GPU memory through hipFile, by the bench the test compiles in the guest, with what arrived checked by a GEMM on the GPU against the host's (quickstart_hipfile_read_bytes_per_second). The figure of one test run, not a live rate: the read is over in a fraction of a second, which the NVMe panels above draw as next to nothing. \"no test run\" until a run has passed. Hundreds of MB/s when the emulated NVMe maps the GPU's memory (`<vm-nvme-vram>` on the fork QEMU), some 11 to 13 MB/s when it does not. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: the age tile says how old. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps",
+          "noValue": "no fio result"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 25
+      },
+      "id": 82,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "hipFile fio Read Rate (last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "quickstart_hipfile_fio_bytes_per_second{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "What `qemu-tool quick-start test --hipfile-test` last measured on this guest with fio's libhipfile ioengine: bytes per second fio read from a 64 MiB file on the NVMe namespace into GPU memory (quickstart_hipfile_fio_bytes_per_second). The figure of one test run, not a live rate. \"no fio result\" until a run has passed on a guest whose image carries that fio, /opt/fio-hipfile/bin/fio, which the golden bake installs; on an image without it the test still passes, says \"not in this image\", and leaves this tile empty. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: the age tile says how old. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s",
+          "noValue": "no test run"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 25
+      },
+      "id": 83,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "hipFile Measured (time since last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "clamp_min(time() - quickstart_hipfile_timestamp_seconds{job=\"fleet-node\",vm_name=~\"$vm\"}, 0)",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Time since the hipFile figures in this row were measured (quickstart_hipfile_timestamp_seconds, the guest's clock when the test recorded them). \"no test run\" until `qemu-tool quick-start test --hipfile-test` has passed. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: this tile is that age. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has. The age is this stack's Prometheus clock less the guest's, so a guest clock that runs ahead reads as 0 s, not as a negative age."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 60,
+      "title": "SDXI",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "no counters",
+                  "color": "blue",
+                  "index": 0
+                },
+                "1": {
+                  "text": "up",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 8,
+        "x": 0,
+        "y": 30
+      },
+      "id": 61,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "SDXI Device Up",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sdxi_up{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Whether each guest read its SDXI device's counters (sdxi_up, written by sdxi-textfile-metrics.timer in the guest). \"no counters\" is the right answer for a guest with no SDXI device, which is every guest of a fleet with <sdxi-per-vm>0. For a guest that has one it means the read failed, and `journalctl -u sdxi-textfile-metrics.service` in the guest says why. No tile at all means the guest has no exporter: an image baked before it, until `qemu-tool quick-start test` installs it."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 8,
+        "x": 8,
+        "y": 30
+      },
+      "id": 62,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "SDXI Errors (dashboard range)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum by (vm_name) (increase(sdxi_num_errors_total{job=\"fleet-node\",vm_name=~\"$vm\"}[$__range]))",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Operations the SDXI device failed, per VM, over the time range the dashboard is showing, all contexts. One failed operation is one count, so a single failure turns its tile red until it leaves the range."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s",
+          "noValue": "no test run"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 8,
+        "x": 16,
+        "y": 30
+      },
+      "id": 67,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "SDXI Copy Verified (time since last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "clamp_min(time() - quickstart_sdxi_copy_timestamp_seconds{job=\"fleet-node\",vm_name=~\"$vm\"}, 0)",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Time since `qemu-tool quick-start test --sdxi-test` last copied data through this guest's SDXI device and found the copy identical to its source (quickstart_sdxi_copy_timestamp_seconds, which the test writes only when the comparison passed). \"no test run\" until it has. A check and not a benchmark: it moves 4 MiB once, which the throughput panels below draw as about 35 kB/s for two minutes. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: this tile is that age. A later run that fails changes nothing here: the tile keeps the last copy that passed, and only its growing age shows that no newer one has. The age is this stack's Prometheus clock less the guest's, so a guest clock that runs ahead reads as 0 s, not as a negative age."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "id": 63,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "SDXI Copy Throughput Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(sdxi_bytes_moved_total{job=\"fleet-node\",context=\"1\",vm_name=~\"$vm\"}[2m])",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Bytes per second copied by each guest's SDXI device, from sdxi_bytes_moved_total of context 1, the context every client operation runs in. Each guest writes the counters for node-exporter's textfile collector every 15 s and the rate is taken over 2 minutes, eight of those: a steady workload reads within about 13% of its rate, and a short burst shows as its bytes spread over 2 minutes. Zero while nothing is copying, which is most of the time: `quick-start test --sdxi-test` copies 4 MiB once on each guest, and that reads here as about 35 kB/s for two minutes."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "id": 64,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "SDXI Copies/s Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(sdxi_num_copy_total{job=\"fleet-node\",context=\"1\",vm_name=~\"$vm\"}[2m])",
+          "legendFormat": "{{vm_name}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Copy operations per second completed by each guest's SDXI device, from sdxi_num_copy_total of context 1. Each guest writes the counters for node-exporter's textfile collector every 15 s and the rate is taken over 2 minutes, eight of those: a steady workload reads within about 13% of its rate, and a short burst shows as its bytes spread over 2 minutes."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 39
+      },
+      "id": 65,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "SDXI Compress / Decompress Bytes/s Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(sdxi_bytes_compressed_total{job=\"fleet-node\",context=\"1\",vm_name=~\"$vm\"}[2m])",
+          "legendFormat": "{{vm_name}} compress in",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(sdxi_bytes_decompressed_total{job=\"fleet-node\",context=\"1\",vm_name=~\"$vm\"}[2m])",
+          "legendFormat": "{{vm_name}} decompress out",
+          "refId": "B"
+        }
+      ],
+      "description": "Uncompressed bytes per second through each guest's SDXI device: the input of compress operations and the output of decompress operations, which is what the two counters count. Each guest writes the counters for node-exporter's textfile collector every 15 s and the rate is taken over 2 minutes, eight of those: a steady workload reads within about 13% of its rate, and a short burst shows as its bytes spread over 2 minutes."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 39
+      },
+      "id": 66,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "SDXI Compress / Decompress Ops/s Per VM",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(sdxi_num_compress_total{job=\"fleet-node\",context=\"1\",vm_name=~\"$vm\"}[2m])",
+          "legendFormat": "{{vm_name}} compress",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(sdxi_num_decompress_total{job=\"fleet-node\",context=\"1\",vm_name=~\"$vm\"}[2m])",
+          "legendFormat": "{{vm_name}} decompress",
+          "refId": "B"
+        }
+      ],
+      "description": "Compress and decompress operations per second completed by each guest's SDXI device. Each guest writes the counters for node-exporter's textfile collector every 15 s and the rate is taken over 2 minutes, eight of those: a steady workload reads within about 13% of its rate, and a short burst shows as its bytes spread over 2 minutes."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 70,
+      "title": "P4 — FP8 Reduction In The NIC",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "Bps",
+          "noValue": "no test run"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 46
+      },
+      "id": 71,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "P4 FP8 Rate (last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "quickstart_p4_fp8_bytes_per_second{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}} {{device}}",
+          "refId": "A"
+        }
+      ],
+      "description": "What `qemu-tool quick-start test --p4-test` last measured: fp8 result bytes per second from p4_fp8_bench, one byte an element, on the first guest's NIC (quickstart_p4_fp8_bytes_per_second). The figure of one test run, not a live rate: the NIC's server counts no bytes for a reduction, so no RDMA byte counter on this dashboard moves while one runs. \"no test run\" until a run has passed; only the first guest runs it. Not comparable across element counts. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: the age tile says how old. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s",
+          "noValue": "no test run"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 46
+      },
+      "id": 72,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "P4 FP8 Time Per Reduction (last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "quickstart_p4_fp8_operation_seconds{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}} {{device}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Average time of one reduction in the last `quick-start test --p4-test` run (quickstart_p4_fp8_operation_seconds): one RDMA WRITE of two operand regions, completed by the NIC as an elementwise fp8 add. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: the age tile says how old. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none",
+          "noValue": "no test run",
+          "decimals": 0
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 46
+      },
+      "id": 73,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "P4 FP8 Test Size (last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "quickstart_p4_fp8_elements{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}} elements per reduction",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "quickstart_p4_fp8_iterations{job=\"fleet-node\",vm_name=~\"$vm\"}",
+          "legendFormat": "{{vm_name}} reductions timed",
+          "refId": "B"
+        }
+      ],
+      "description": "What the last `quick-start test --p4-test` run timed: elements in each reduction (quickstart_p4_fp8_elements; 262144 is the most the device moves in one) and how many reductions (quickstart_p4_fp8_iterations, `--p4-iters`). The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: the age tile says how old. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s",
+          "noValue": "no test run"
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 46
+      },
+      "id": 74,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "P4 FP8 Measured (time since last pass)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "clamp_min(time() - quickstart_p4_fp8_timestamp_seconds{job=\"fleet-node\",vm_name=~\"$vm\"}, 0)",
+          "legendFormat": "{{vm_name}} {{device}}",
+          "refId": "A"
+        }
+      ],
+      "description": "Time since the P4 figures in this row were measured (quickstart_p4_fp8_timestamp_seconds, the guest's clock when the test recorded them). \"no test run\" until `qemu-tool quick-start test --p4-test` has passed. The record is a file the test leaves for node-exporter's textfile collector in the guest, so it outlives a guest reboot and can be older than this boot: this tile is that age. A later run that fails changes nothing here: the tiles keep the last run that passed, and only its growing age shows that no newer one has. The age is this stack's Prometheus clock less the guest's, so a guest clock that runs ahead reads as 0 s, not as a negative age."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "id": 38,
+      "title": "Network & Driver Status",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Not found",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "1 bound",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "2": {
+                  "text": "Both bound",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "N/A",
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 0,
+        "y": 51
+      },
+      "id": 36,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "noValue": "N/A"
+      },
+      "title": "rocm-ernic0 (ionic)",
+      "description": "Counts VMs where rocm-ernic0 is visible to node-exporter. Present = ionic driver is loaded and bound.",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(node_network_info{job=\"fleet-node\",device=\"rocm-ernic0\"}) or vector(0)",
+          "legendFormat": "VMs with rocm-ernic0",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Down",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "1 up",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "2": {
+                  "text": "Both up",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "N/A",
+                  "color": "blue",
+                  "index": 3
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 6,
+        "y": 51
+      },
+      "id": 37,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "noValue": "N/A"
+      },
+      "title": "ionic_rdma (RDMA exporter up)",
+      "description": "Counts VMs where rdma-metrics-exporter is reachable. Up = ionic_rdma module is loaded.",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(up{job=\"rdma-exporter\"} == 1) or vector(0)",
+          "legendFormat": "VMs with ionic_rdma",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "VMs with IB port in ACTIVE state from rdma_exporter hardware counters.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "None",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "1 active",
+                  "color": "yellow",
+                  "index": 1
+                },
+                "2": {
+                  "text": "Both active",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            }
+          ]
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 12,
+        "y": 51
+      },
+      "id": 41,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "IB Port Active",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "count(rdma_port_info{job=\"rdma-exporter\",state=\"ACTIVE\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "RDMA link speed label from rdma_port_info per VM.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": {
+        "h": 3,
+        "w": 6,
+        "x": 18,
+        "y": 51
+      },
+      "id": 42,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "title": "Link Speed",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rdma_port_info{job=\"rdma-exporter\"}",
+          "legendFormat": "{{vm_name}} {{link_speed}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      },
+      "id": 40,
+      "title": "RDMA Device Counters (rdma_exporter)",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "RDMA byte rates from rdma_exporter hardware counters on the ionic device (send/recv/read/write). Device-level, complementing ernic-stats mesh-level counters below.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 55
+      },
+      "id": 43,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "RDMA Bytes/s Per Device",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_total_bytes_sent_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} send",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_total_bytes_received_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} recv",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_total_bytes_rdma_read_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} RDMA read",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_total_bytes_rdma_write_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} RDMA write",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "description": "RDMA command rate per device from rdma_exporter. Admin queue commands to the ionic RDMA device.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 55
+      },
+      "id": 44,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "RDMA Commands/s Per Device",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(rdma_commands_total{job=\"rdma-exporter\",vm_name=~\"$vm\"}[$__rate_interval])",
+          "legendFormat": "{{vm_name}} {{device}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "id": 30,
+      "title": "RDMA — Ernic Mesh",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 62
+      },
+      "id": 31,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "RDMA Throughput — Fleet Total",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_rdma_bytes_sent_total[$__rate_interval]))",
+          "legendFormat": "send",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_rdma_bytes_received_total[$__rate_interval]))",
+          "legendFormat": "recv",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_rdma_bytes_read_total[$__rate_interval]))",
+          "legendFormat": "RDMA read",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_rdma_bytes_write_total[$__rate_interval]))",
+          "legendFormat": "RDMA write",
+          "refId": "D"
+        }
+      ],
+      "description": "Fleet-total RDMA byte rate broken out by operation type: SEND, RECV, RDMA Read, RDMA Write. From ernic-stats-exporter."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 62
+      },
+      "id": 32,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "valueMode": "color"
+      },
+      "title": "RDMA By Node",
+      "type": "bargauge",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum by (ernic_id, role) (rate(ernic_rdma_bytes_total[$__rate_interval]))",
+          "legendFormat": "node {{ernic_id}} ({{role}})",
+          "refId": "A"
+        }
+      ],
+      "description": "RDMA bytes per second per ernic node (current snapshot). Shows which nodes are active in the mesh."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 62
+      },
+      "id": 33,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "TCP Mesh Fleet Traffic",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_ip_bytes_tx_total[$__rate_interval]))",
+          "legendFormat": "TX",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_ip_bytes_rx_total[$__rate_interval]))",
+          "legendFormat": "RX",
+          "refId": "B"
+        }
+      ],
+      "description": "TCP/IP bytes per second on the ernic TAP Ethernet network per direction (TX/RX). This carries RDMA signalling and out-of-band exchange."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 70
+      },
+      "id": 34,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "Doorbells & Completions — Fleet Total",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_qp_doorbell_send_total[$__rate_interval]))",
+          "legendFormat": "doorbell send",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_qp_doorbell_recv_total[$__rate_interval]))",
+          "legendFormat": "doorbell recv",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_qp_cqes_posted_total[$__rate_interval]))",
+          "legendFormat": "CQEs posted",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "sum(rate(ernic_qp_wqes_processed_total[$__rate_interval]))",
+          "legendFormat": "WQEs processed",
+          "refId": "D"
+        }
+      ],
+      "description": "RDMA queue pair activity: send/recv doorbells ring when a WQE is posted; CQEs and WQEs track completions. A proxy for RDMA operation rate."
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "fleet-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 70
+      },
+      "id": 35,
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "title": "RDMA Traffic By Node",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(ernic_rdma_bytes_sent_total[$__rate_interval])",
+          "legendFormat": "node {{ernic_id}} send",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "fleet-prometheus"
+          },
+          "expr": "rate(ernic_rdma_bytes_received_total[$__rate_interval])",
+          "legendFormat": "node {{ernic_id}} recv",
+          "refId": "B"
+        }
+      ],
+      "description": "Per-node RDMA send/recv byte rate over time. Useful for spotting asymmetric traffic or stalled nodes."
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 76
+      },
+      "id": 50,
+      "title": "Stack Logs",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "fleet-loki"
+      },
+      "description": "Logs of the stack's containers -- the ernic, rocjitsu and SDXI device servers, QEMU, Prometheus and Grafana -- shipped to Loki by Alloy. Only present when <logs-enable> is true. Nothing here comes from inside a guest.",
+      "fieldConfig": {
+        "defaults": {}
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 77
+      },
+      "id": 56,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "Stack Logs (Alloy → Loki)",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "fleet-loki"
+          },
+          "expr": "{job=\"docker\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "auto",
+  "schemaVersion": 39,
+  "tags": [
+    "quickstart",
+    "ernic",
+    "gpu"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "fleet-prometheus"
+        },
+        "definition": "label_values(up{job=\"fleet-node\"}, vm_name)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "vm",
+        "options": [],
+        "query": {
+          "query": "label_values(up{job=\"fleet-node\"}, vm_name)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query",
+        "label": "VM"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Quick Start Overview",
+  "uid": "qs-overview",
+  "version": 1,
+  "weekStart": ""
+}

@@ -59,7 +59,7 @@ ROCJITSU_METRICS = PLAYBOOKS / "roles" / "rocjitsu_setup" / "tasks" / "metrics.y
 COMPOSE = REPO / "qemu" / "compose"
 FLEET_DIR = Path("grafana") / "dashboards" / "fleet"
 HOME = FLEET_DIR / "quickstart.json"
-NAMES = ("rocm-golden", "helios-tray", "mi355x-server", "xio")
+NAMES = ("rocm-golden", "helios-tray", "mi355x-server", "xio", "storage")
 DOCS = (REPO / "README.md", REPO / "AGENTS.md",
         COMPOSE / "rocm-golden" / "README.md")
 

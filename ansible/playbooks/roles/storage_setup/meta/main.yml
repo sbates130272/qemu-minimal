@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: storage_setup
+  author: Stephen Bates
+  description: >-
+    The storage stack's two guests. `server` tasks make a guest with NVMe
+    drives an NVMe-oF target over RDMA and an NFS-over-RDMA server. `client`
+    tasks connect a guest to that server and to the S3 and NVMe-oF stores
+    inside its own NICs, and the test scripts write, read back and compare
+    over each path. Needs the emulated RDMA NIC.
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - noble
+        - resolute
+
+dependencies: []

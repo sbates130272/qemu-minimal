@@ -54,6 +54,48 @@ METRICS = (
         "base_unit": "B/s",
         "higher_is_better": True,
     },
+    # The storage flavor's rates, from scripts/storage-report.py: a small
+    # write and read back timed together, once a run.
+    {
+        "key": "storage-nic-nvmeof",
+        "label": "NVMe-oF in NIC",
+        "badge_file": "badge-storage-nic-nvmeof.json",
+        "source": ("storage", "badge-storage-nic-nvmeof.json"),
+        "base_unit": "B/s",
+        "higher_is_better": True,
+    },
+    {
+        "key": "storage-nvmeof",
+        "label": "NVMe-oF RDMA",
+        "badge_file": "badge-storage-nvmeof.json",
+        "source": ("storage", "badge-storage-nvmeof.json"),
+        "base_unit": "B/s",
+        "higher_is_better": True,
+    },
+    {
+        "key": "storage-nfs",
+        "label": "NFS RDMA",
+        "badge_file": "badge-storage-nfs.json",
+        "source": ("storage", "badge-storage-nfs.json"),
+        "base_unit": "B/s",
+        "higher_is_better": True,
+    },
+    {
+        "key": "storage-hipfile-nvmeof",
+        "label": "hipFile NVMe-oF",
+        "badge_file": "badge-storage-hipfile-nvmeof.json",
+        "source": ("storage", "badge-storage-hipfile-nvmeof.json"),
+        "base_unit": "B/s",
+        "higher_is_better": True,
+    },
+    {
+        "key": "storage-hipfile-nfs",
+        "label": "hipFile NFS RDMA",
+        "badge_file": "badge-storage-hipfile-nfs.json",
+        "source": ("storage", "badge-storage-hipfile-nfs.json"),
+        "base_unit": "B/s",
+        "higher_is_better": True,
+    },
 )
 
 # Changes to what a metric measures, newest first. The date is the day the
@@ -117,6 +159,11 @@ CHART_COLORS = {
     "hipfile-fio": "#0d6efd",
     "ernic-p4-bw": "#ed6b21",
     "sdxi-bw": "#0071C5",
+    "storage-nic-nvmeof": "#6f42c1",
+    "storage-nvmeof": "#20a39e",
+    "storage-nfs": "#b5651d",
+    "storage-hipfile-nvmeof": "#d63384",
+    "storage-hipfile-nfs": "#5c7cfa",
 }
 
 BADGE_RE = re.compile(r"^([0-9]+(?:\.[0-9]+)?)\s*([kMGT]?)([A-Za-z/]+)$")

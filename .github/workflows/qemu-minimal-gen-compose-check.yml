@@ -177,7 +177,7 @@ jobs:
           import json, subprocess, sys
 
           ROOT = "qemu/compose"
-          STACKS = ["rocm-golden", "helios-tray", "mi355x-server", "xio"]
+          STACKS = ["rocm-golden", "helios-tray", "mi355x-server", "xio", "storage"]
           # tapsetup cannot take a uid (Docker sets no ambient capabilities,
           # so a non-root uid holds no effective NET_ADMIN). alloy must not:
           # it mounts /var/run/docker.sock to ship container logs, and that
@@ -302,7 +302,7 @@ jobs:
       - name: Committed stacks match their fleet files
         run: |
           set -eu
-          for stack in rocm-golden helios-tray mi355x-server xio; do
+          for stack in rocm-golden helios-tray mi355x-server xio storage; do
             python3 -m qemu_tool gen-compose \
               --xml "qemu/stacks/${stack}.xml" --check
           done

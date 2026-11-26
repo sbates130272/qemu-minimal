@@ -1,0 +1,208 @@
+---
+# Connect the client to every store it can reach: the NVMe-oF controller
+# and the S3 store inside its own NICs, and the storage server's NVMe-oF
+# target and NFS export across the mesh. `tests.yml` then uses them.
+#
+# storage_setup_server names the server's inventory host.
+
+- name: Check the server is named
+  ansible.builtin.assert:
+    that:
+      - storage_setup_server is defined
+      - storage_setup_server in hostvars
+    fail_msg: >-
+      storage_setup_server names the inventory host that is the storage
+      server, whose address the client connects to.
+
+- name: Take the server's address from the inventory
+  ansible.builtin.set_fact:
+    storage_setup_server_ip: "{{ hostvars[storage_setup_server].fleet_guest_ip }}"
+
+- name: Install what the client needs
+  ansible.builtin.apt:
+    name: "{{ storage_setup_client_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Load the fabrics and RPC-over-RDMA modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - nvme-fabrics
+    - nvme-rdma
+    - rpcrdma
+
+# ---- the stores inside the client's own NICs ---------------------------
+
+- name: Connect to the NVMe-oF controller inside the NIC
+  ansible.builtin.include_role:
+    name: rocm_xio_setup
+    tasks_from: nvmeof
+  vars:
+    rocm_xio_setup_nvmeof_nic: "{{ storage_setup_nic_nvmeof_nic }}"
+    rocm_xio_setup_nvmeof_address: "{{ storage_setup_nic_nvmeof_address }}"
+    rocm_xio_setup_nvmeof_traddr: "{{ storage_setup_nic_nvmeof_traddr }}"
+    rocm_xio_setup_nvmeof_lladdr: "{{ storage_setup_nic_nvmeof_lladdr }}"
+    rocm_xio_setup_nvmeof_nqn: "{{ storage_setup_nic_nvmeof_nqn }}"
+
+- name: Name its block and its KV namespace
+  ansible.builtin.set_fact:
+    storage_setup_nic_block: >-
+      /dev/{{ rocm_xio_setup_nvmeof_seen.stdout
+              | regex_search('block=(\S+)', '\1') | first }}
+    storage_setup_nic_kv: >-
+      /dev/{{ rocm_xio_setup_nvmeof_seen.stdout
+              | regex_search('kv=(\S+)', '\1') | first }}
+
+- name: Give the S3 NIC an address beside the store's
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      nic={{ storage_setup_s3_nic | quote }}
+      [ -e "/sys/class/net/$nic" ] || {
+          echo "no network device $nic: it is the NIC whose server runs the s3 backend" >&2
+          exit 1
+      }
+      ip link set "$nic" up
+      ip addr replace {{ storage_setup_s3_address | quote }} dev "$nic"
+    executable: /bin/sh
+  changed_when: false
+
+# ---- the storage server, across the mesh -------------------------------
+
+- name: Wait for the server to answer on the RDMA network
+  ansible.builtin.command:
+    cmd: "ping -c 1 -W 2 {{ storage_setup_server_ip }}"
+  register: storage_setup_ping
+  changed_when: false
+  retries: 15
+  delay: 2
+  until: storage_setup_ping.rc == 0
+
+- name: Look for a controller already connected to the server's target
+  ansible.builtin.shell:
+    cmd: |
+      for s in /sys/class/nvme/nvme*; do
+          [ -r "$s/subsysnqn" ] || continue
+          [ "$(cat "$s/transport")" = rdma ] || continue
+          if [ "$(cat "$s/subsysnqn")" = {{ storage_setup_nvmet_nqn | quote }} ]; then
+              basename "$s"
+              exit 0
+          fi
+      done
+    executable: /bin/sh
+  register: storage_setup_target_before
+  changed_when: false
+
+- name: Connect to the server's NVMe-oF target
+  ansible.builtin.command:
+    argv:
+      - nvme
+      - connect
+      - -t
+      - rdma
+      - -a
+      - "{{ storage_setup_server_ip }}"
+      - -s
+      - "{{ storage_setup_nvmet_port | string }}"
+      - -n
+      - "{{ storage_setup_nvmet_nqn }}"
+  changed_when: true
+  timeout: 120
+  when: storage_setup_target_before.stdout | trim | length == 0
+
+- name: Find the server's namespaces
+  ansible.builtin.script:
+    cmd: >-
+      storage-namespaces.sh
+      {{ storage_setup_nvmet_nqn | quote }}
+      {{ storage_setup_nvmet_drives | int }}
+  register: storage_setup_target_seen
+  changed_when: false
+  failed_when: false
+
+- name: Fail unless every namespace the server serves is there
+  ansible.builtin.assert:
+    that:
+      - storage_setup_target_seen.rc == 0
+    fail_msg: >-
+      The NVMe-oF controller for {{ storage_setup_nvmet_nqn }} at
+      {{ storage_setup_server_ip }} did not show
+      {{ storage_setup_nvmet_drives }} block namespace(s) within 15 s:
+      {{ storage_setup_target_seen.stderr | default('') | trim }}
+    success_msg: >-
+      {{ storage_setup_target_seen.stdout_lines | select | list | length }}
+      namespace(s) from {{ storage_setup_server_ip }}
+
+- name: Name the server's namespaces
+  ansible.builtin.set_fact:
+    storage_setup_target_devices: >-
+      {{ storage_setup_target_seen.stdout_lines | select
+         | map('trim') | map('split', ' ') | map('last') | list }}
+
+- name: Make the NFS mount point
+  ansible.builtin.file:
+    path: "{{ storage_setup_nfs_mount }}"
+    state: directory
+    mode: "0755"
+
+- name: Mount the server's export over RDMA
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      dir={{ storage_setup_nfs_mount | quote }}
+      if findmnt -n -t nfs4 "$dir" >/dev/null; then
+          echo "already mounted"
+          exit 0
+      fi
+      mount -t nfs4 -o rdma,port={{ storage_setup_nfs_rdma_port }},vers=4.2 \
+          {{ storage_setup_server_ip }}:{{ storage_setup_nfs_export }} "$dir"
+    executable: /bin/sh
+  register: storage_setup_nfs_client_mounted
+  changed_when: "'already mounted' not in storage_setup_nfs_client_mounted.stdout"
+  timeout: 120
+
+# ---- statistics --------------------------------------------------------
+
+# node_exporter is in the image and Prometheus scrapes it. Its NFS client
+# collector is on already (node_nfs_*), and the server's guest has the
+# other half (node_nfsd_*). What is off by default is the per-mount
+# collector, which is where a mount's transport statistics are.
+- name: Turn node_exporter's per-mount NFS statistics on
+  ansible.builtin.lineinfile:
+    path: /etc/default/prometheus-node-exporter
+    regexp: '^ARGS='
+    line: >-
+      ARGS="--collector.textfile.directory={{ storage_setup_textfile_dir }}
+      --collector.mountstats"
+    create: true
+    mode: "0644"
+  register: storage_setup_exporter_args
+  when: storage_setup_mountstats | bool
+
+- name: Restart node_exporter with them
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    state: restarted
+  when:
+    - storage_setup_mountstats | bool
+    - storage_setup_exporter_args is changed
+
+- name: Check the mount's statistics are exported
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+          found=$(curl -s --max-time 5 http://127.0.0.1:9100/metrics || true)
+          case "$found" in
+              *node_mountstats_nfs_*) echo "per-mount NFS statistics exported"; exit 0 ;;
+          esac
+          sleep 1
+      done
+      echo "node_exporter on :9100 exports no node_mountstats_nfs_ series" >&2
+      exit 1
+    executable: /bin/sh
+  changed_when: false
+  when: storage_setup_mountstats | bool

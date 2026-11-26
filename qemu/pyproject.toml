@@ -107,7 +107,7 @@ packages = [
 # must not ship. `qemu-tool quick-start` reads rocm-golden.xml when given no
 # --xml, and a `uv tool install` or `pipx install` has no checkout to read it
 # from, so without these in the wheel it dies before doing anything at all.
-"qemu_tool.share.stacks" = ["rocm-golden.xml", "helios-tray.xml", "mi355x-server.xml", "xio.xml"]
+"qemu_tool.share.stacks" = ["rocm-golden.xml", "helios-tray.xml", "mi355x-server.xml", "xio.xml", "storage.xml"]
 # Fleet overlays: layers that go on top of a stack's file, not stacks of their
 # own. `quick-start --vfu-doorbell` reads vfu-doorbell.xml from here.
 "qemu_tool.share.overlays" = ["vfu-doorbell.xml"]

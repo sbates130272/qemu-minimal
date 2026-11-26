@@ -8,24 +8,28 @@ file up to date as infrastructure changes.
 ## Repository layout
 
 - `qemu/` — qemu-tool Python package (installed as a Debian package or via pipx); the sources are in `qemu/qemu-tool/`, imported as `qemu_tool`
-- `qemu/stacks/` — the fleet XML settings files, and the only settings files in the repo: `rocm-golden.xml`, `helios-tray.xml`, `mi355x-server.xml`, `xio.xml`. It is a sibling of `qemu/compose/` and `qemu/packages.d/` and is mapped in place by `package-dir`, for the same reason they are: these are data the wheel ships, not Python source, so they do not belong under `qemu/qemu-tool/`
-- `qemu/compose/` — exactly four stacks, each **generated** by `qemu-tool gen-compose` from the fleet file of the same name; do not hand-edit one. `--profile metrics` adds Prometheus+Grafana to any of them
+- `qemu/stacks/` — the fleet XML settings files, and the only settings files in the repo: `rocm-golden.xml`, `helios-tray.xml`, `mi355x-server.xml`, `xio.xml`, `storage.xml`. It is a sibling of `qemu/compose/` and `qemu/packages.d/` and is mapped in place by `package-dir`, for the same reason they are: these are data the wheel ships, not Python source, so they do not belong under `qemu/qemu-tool/`
+- `qemu/compose/` — exactly five stacks, each **generated** by `qemu-tool gen-compose` from the fleet file of the same name; do not hand-edit one. `--profile metrics` adds Prometheus+Grafana to any of them
   - `rocm-golden/` — the default stack: two guests from the published rocm-golden qcow2, each with a GPU, an NVMe, an ernic with P4 in guest scope and an SDXI device. The stack `qemu-tool compose` runs when given no `--stack`, and the one `quick-start` renders
   - `helios-tray/` — one VM with 4 GPUs, 8 ernics and an SDXI device; the stack behind `quick-start --flavor helios`
   - `mi355x-server/` — MI355X-shaped PCIe topology: one EPYC socket, 8 GPUs, 8 NICs and 8 PCIe switches per VM, one NIC + one GPU below each switch. 8 ernics per VM means 8 *mesh nodes* per VM, so the fleet caps at 4 VMs, not 40 — see its README. Nothing in CI boots it: `Gen Compose Check` renders it and checks the switch topology, and `quick-start --flavor mi355x` is the way to run it
+  - `storage/` — two guests that are not alike: a GPU client with a GPU, SDXI, one NVMe and three ernics (the mesh, an S3-over-RDMA store, an NVMe-oF target with a block and a KV namespace), and a storage server with one ernic, SDXI, no GPU and 24 NVMe drives of 8 TiB. The stack behind `quick-start --flavor storage`, and the only shipped fleet whose `<devices>` entries carry a `vm` attribute. See "The storage stack"
   - `xio/` — the rocm-xio development guest: one VM with 2 GPUs, two ernics (one on the loopback backend, one serving NVMe-oF with a block and a KV namespace), an NVMe behind `pci-mmio-bridge` and an SPDK NVMe-KV controller. The stack behind `quick-start --flavor xio`, and the only shipped fleet with a `<devices>` block. See "The xio stack"
 - `qemu/qemu-tool/settings.py` — the one loader: fleet XML layers in, a `FleetConfig` (or `VMConfig` overrides) out. See "Settings" below
 - `qemu/schema/fleet.rng`, `qemu/schema/fleet.xsd` and `docs/fleet-xml.md` — the RELAX NG schema for fleet XML, the XSD 1.0 one and their reference page. All three are **generated** by `qemu-tool fleet-schema` (`qemu/qemu-tool/fleet_schema.py`) from the parser's tables; do not hand-edit any. See "The schema and the reference page"
 - `docs/api/` + `.mkdocs/`: the Python API pages of the site. `docs/api/*.md` name the modules; mkdocstrings builds the text from the docstrings under `qemu/qemu-tool/` when the site is built, and none of it is committed. `.mkdocs/qemu_tool` is a symlink to `../qemu/qemu-tool`, which is how the build finds a package whose directory has a hyphen, `.mkdocs/griffe_qemu_tool.py` is the griffe extension the build loads, and `.mkdocs/templates/` holds two mkdocstrings templates that keep source out of the site search. See "The published site"
 - `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/vm-quickstart.yml` — the README's Quick Start, which is `qemu-tool quick-start`: two guests from the published qcow2, Prometheus, Grafana and log collection beside them, plus a GPU test and an inter-guest RDMA test. It runs `qemu/stacks/rocm-golden.xml` unless given `--xml` or `--flavor`; `--flavor default` is that fleet. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive
 - `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
-- `ansible/playbooks/` — four playbooks and eight roles, and nothing else:
+- `ansible/playbooks/` — five playbooks and ten roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
   - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI, perftest and fio built from source, and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC and builds no driver (known issue 16 says why it must not), `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin` with `ionic_kernel_pin_commit` and `ionic_kernel_mirror`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`, `perftest_source_pin`, `fio_source_pin`) are each defined once and shared between plays through YAML anchors; see "Where the ionic kernel sources come from" for the first three. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default, and the two workflows that bake the guest, the playbook-test lane and the publish workflow, each pass one and share what it holds — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
   - `vm-quickstart.yml` — configures and tests a running fleet; what `qemu-tool quick-start test` runs. Four of its plays are optional and off by default: the SDXI test (`--sdxi-test`), the P4 fp8 test (`--p4-test`), the hipFile test (`--hipfile-test`) and the GPU-memory RDMA test (`--rocm-rdma-test`)
   - roles `rocm_ernic_setup` (image prep, device naming, boot-time addressing, the P4 client and who may open `/dev/ernic-p4`, the mirror and commit check for the ionic kernel sources, and `driver_check`, which asks a guest whether its ionic driver is still the baked SRQ + P4 build), `rocjitsu_setup` (firmware, amdgpu, tools, live tests), `sdxi_setup`, `image_slim` and `bake_ccache` (the compiler cache: `restore`, `save` and `remove`, no `main`). Each has task files callers reach with `tasks_from`; all five are linted at the `production` profile in CI
   - `vm-xio.yml` — configures a running guest of the xio stack; what `qemu-tool quick-start --flavor xio test` runs. Firmware and the amdgpu probe, and, only with `--xio-test`, the `rocm_xio_setup` role: rocm-xio is not in the golden image
   - role `rocm_xio_setup` — rocm-xio built in the guest from a pinned branch and commit: `xio-tester`, the `rocm-xio` kernel module and the `/dev/xio-kv` and `/dev/xio-blk` naming rule and group access to `/dev/rocm-xio`; `tasks_from: load` loads the module and checks the devices, `tasks_from: nvmeof` connects the guest to the NVMe-oF NIC. Linted with the others. See "The xio stack"
+  - `vm-storage.yml` — configures the two guests of the storage stack and tests every storage path between them; what `qemu-tool quick-start --flavor storage test` runs. It tells the guests apart by what the inventory says each has, makes the one with the drives an NVMe-oF target and an NFS-over-RDMA server, builds hipObject on the one with the GPU, and runs the tests there. See "The storage stack"
+  - role `hipobject_setup` — hipObject built in the guest from a pinned branch and commit and installed under `/opt/hipobject`, with `minio-getput-rdma`, the program that puts an object to an S3 store over RDMA, gets it back and compares it. Its fetch script is `perftest-fetch.sh` under another name. Linted with the others
+  - role `storage_setup` — the storage stack's two halves and its tests, reached with `tasks_from`: `server` (the kernel NVMe-oF target over RDMA and the NFS-over-RDMA export), `client` (connects to that server and to the stores inside the client's own NICs) and `tests` (one script a path, each printing one `storage <name>:` line). No `main`. Linted with the others
   - role `perftest_setup` — perftest built from a pinned commit with ROCm memory support, installed in `/usr/local/bin` ahead of the archive's package; linted with the other five. See "perftest with ROCm memory support"
   - role `fio_hipfile_setup` — fio built from a pinned release (`fio-3.43`) with the `libhipfile` ioengine, installed under `/opt/fio-hipfile` and on no PATH, so the archive's fio stays what a bare `fio` runs; linted with the other six. See "fio with the libhipfile engine"
 - `scripts/install-vfio-rules` + `scripts/99-qemu-minimal-vfio.rules` — host-side udev rules for PCI passthrough. There is no top-level `udev/` any more: guest rules live in their role's `files/`
@@ -459,8 +463,61 @@ the user's view; this is what a change to it has to keep true.
   appended. A layer cannot remove a device, and an id cannot change type.
   `FleetXml.layer_problems` reports what only shows across layers, and
   `qemu-tool check` prints it as a `layers merge` line.
-- **Every guest gets the same devices**, in the generator's order (NICs,
-  then GPUs, or the switch grouping), not the block's.
+- **Every guest gets the same devices unless an entry has a `vm`
+  attribute**, in the generator's order (NICs, then GPUs, or the switch
+  grouping), not the block's.
+- **`vm` on a `<server>` names the guests that get the device**, by number
+  from 1 (`vm='1'`, `vm='1,3'`, `vm='all'`), and is how the guests of one
+  fleet differ. Added on 2026-11-26 for the storage stack, the one shipped
+  fleet that uses it; "The storage stack" has what was run.
+  - `Server.vms` is `None` for an entry that did not say, `()` for
+    `vm='all'`, else the sorted numbers. `None` and `()` both mean every
+    guest; the difference is for layers: an entry with the same id in a
+    later layer replaces `vms` only when it names it, and `vm='all'` is how
+    a layer widens what an earlier one narrowed.
+  - **An item may be a role** of `<vm-roles>` (`vm='client'`), every
+    guest of which gets the device; `Server.vms` then holds the name.
+    `<vm-roles>` is a flat sparse element, one role for each guest;
+    `fleet_xml.guest_roles(cfg)` reads it and `guest_names(cfg)` is the one
+    place a guest's name is made: `<prefix>-N` without roles,
+    `<prefix>-<role>-K` with them, K counting within the role.
+    `gen_compose.plan()` and `quick_start._State.vm()` both call it. A role
+    `<vm-roles>` lacks is refused before devices are counted
+    (`_check_vm_attributes`), since otherwise the complaint is the missing
+    device. `all` cannot be a role, and `vm='1,all'` is refused by the
+    parser though both schemas take it: `all` has a role's form.
+  - `fleet_xml.servers_for(devices, n, roles)` is the one place that decides what
+    guest `n` gets, and `scoped(devices)` whether any entry names guests.
+    `plan()` builds each guest's NIC, GPU and SDXI lists from it and numbers
+    devices with running ordinals. With no `vm` anywhere those are the
+    `index * per-VM + d` they always were, which is what keeps the four
+    older stacks byte for byte; `gen-compose --check` on each is the proof.
+  - **The three counts are the most any one guest has** (`device_counts`
+    with `<vm-count>`), so `ernic_per_vm` is 3 for the storage fleet though
+    its second guest has one NIC. They still decide the service suffix
+    (`ernic-2-1`, not `ernic-2`), so nothing that names a service may
+    assume every guest has that many: `quick_start._ernic_suffix` asks
+    `_mesh_nic(state, index)` per guest.
+  - A guest may have no GPU. `vm["rocjitsu_config"]` is then empty,
+    `--nvme-vram-dev` is rendered only for a guest with both a drive and a
+    GPU, and the service comment reads `NIC d/<that guest's count>`.
+  - **Refused at render time** (`_check_guest_devices`): a number above
+    `<vm-count>`; a guest left with no ernic, since its address is its
+    NIC's; a `vm` attribute together with `<vm-pcie-switch-width>`, whose
+    grouping pairs NICs with GPUs by a count every guest shares; and a
+    guest with two SPDK or doorbell servers. A fleet still needs at least
+    one ernic and one GPU somewhere.
+  - **The inventory says what each guest has, only when guests differ**
+    (`spec["guests_differ"]`: a `vm` attribute, or a `<vm-nvme>` list with
+    different values): `fleet_guest_gpus`, `fleet_guest_sdxi`,
+    `fleet_guest_nvme`, and `id` and `backend` on each entry of
+    `fleet_guest_nics` (`mesh` for a NIC with no backend). A fleet of like
+    guests renders the inventory it always did. `vm-storage.yml` groups its
+    hosts by `fleet_guest_gpus`.
+  - The form is `fleet_xml.SERVER_VM_FORM`, exact (ASCII digits, no white
+    space, no sign), so both schemas state the pattern the parser checks;
+    the XSD declares the attribute optional and the RELAX NG schema wraps
+    `server.vm` in `<optional>`.
 - **`quick-start` knows two things about a block.** On more than one guest
   it refuses, before anything starts, a fleet whose guests' first NIC is off
   the mesh (`_check_mesh_tests`): the RDMA tests between guests run on a
@@ -658,12 +715,12 @@ the XSD has a bullet of its own.
   directory as a directory; the first said `cannot write .: Is a
   directory`, because `Path("")` is `.`. The option is a string for that
   reason, not a `Path`.
-- **`tests/test_fleet_schema.py`.** `AGREE` is 295 small documents the
+- **`tests/test_fleet_schema.py`.** `AGREE` is 310 small documents the
   parser and the RELAX NG schema must answer alike, each with the answer;
-  `LOOSER` is eleven the parser refuses and neither schema can.
+  `LOOSER` is twelve the parser refuses and neither schema can.
   `XSD_TAKES` names the six documents of `AGREE` the XSD accepts, and
   `XSD_LOOSER` is ten more the RELAX NG schema refuses and the XSD
-  accepts, each under a key of `xsd_looser()`: 316 documents, and one test
+  accepts, each under a key of `xsd_looser()`: 332 documents, and one test
   asks the parser and both schemas about each and requires the three
   answers it is listed with, which for the XSD is "agrees with the RELAX NG
   schema everywhere but on its listed looseness". Others assert each rule
@@ -672,7 +729,7 @@ the XSD has a bullet of its own.
   with one repeated (267 documents, all three answers), every decimal
   digit Python knows in a single integer, an integer one digit past
   `int()`'s limit, and 400 generated addresses. **Every flat setting is
-  held to its kind, whether or not a document sets it**: 19 of the 76 are
+  held to its kind, whether or not a document sets it**: 19 of the 78 are
   in no listed document and no shipped file, and typing one of those as
   another kind, in either renderer, used to pass the suite. One test reads
   each setting's declaration in both rendered schemas (`kind.<kind>` and
@@ -688,7 +745,7 @@ the XSD has a bullet of its own.
   when that imports, else `xmllint --relaxng` and `xmllint --schema`; with
   neither it skips and prints that no document was validated, and under
   `CI=true` it fails. `Gen Compose Check` installs `lxml`.
-  `python tests/test_fleet_schema.py --dump DIR` writes the 316 documents
+  `python tests/test_fleet_schema.py --dump DIR` writes the 332 documents
   and an `index.json` of the expected answers, for running another
   validator over them by hand. **One document is long on purpose**,
   `BIG_BLOCK`: 254 `<server>` entries, which is every NIC one guest can
@@ -1315,12 +1372,14 @@ stdout is unchanged. This is the one implicit host-vendor path left, and
 
 ## The stacks, and `qemu/stacks/rocm-golden.xml`
 
-There are four fleet files and four stacks, and the names match:
+There are five fleet files and five stacks, and the names match:
 `qemu/stacks/<name>.xml` renders to `qemu/compose/<name>/` for `rocm-golden`,
-`helios-tray`, `mi355x-server` and `xio`. The fourth, `xio`, was added on
-2026-11-19 and has a section of its own, "The xio stack"; where this file
-says "all three fleet files" of something done or measured before that
-date, it means the first three. `rocm-golden` is the default stack: the name
+`helios-tray`, `mi355x-server`, `xio` and `storage`. The fourth, `xio`, was
+added on 2026-11-19 and has a section of its own, "The xio stack"; where
+this file says "all three fleet files" of something done or measured before
+that date, it means the first three. The fifth, `storage`, was added on
+2026-11-26 and has "The storage stack"; "all four" of something before that
+date is the first four. `rocm-golden` is the default stack: the name
 is the fleet's, and "default" is only what it is when nothing else is named. `gen_compose.stack_for()` reads the stack
 off the first `--xml` file's basename, so regenerating a committed stack
 takes neither `--stack` nor `--output-dir`:
@@ -1330,6 +1389,7 @@ qemu-tool gen-compose --xml qemu/stacks/rocm-golden.xml
 qemu-tool gen-compose --xml qemu/stacks/helios-tray.xml
 qemu-tool gen-compose --xml qemu/stacks/mi355x-server.xml
 qemu-tool gen-compose --xml qemu/stacks/xio.xml
+qemu-tool gen-compose --xml qemu/stacks/storage.xml
 qemu-tool gen-compose --check          # no --xml: the default stack against its own file
 ```
 
@@ -1342,7 +1402,9 @@ old generated names map `vfio-user-ernic-rocjitsu-scale-out` → `rocm-golden`,
 its own: it is `rocm-golden.xml` plus an overlay setting `<vm-count>1`, which
 is what the CI lanes that boot a single guest write inline. `gen-compose`
 requires `<ernic-per-vm>` and `<rocjitsu-per-vm>` of at least 1, so a NIC-only
-or GPU-only guest is not expressible; `<sdxi-per-vm>0`, `<p4-enable>false`,
+or GPU-only guest is not expressible with the counts (a `<devices>` block
+whose entries carry a `vm` attribute can give one guest no GPU; every guest
+still has a NIC); `<sdxi-per-vm>0`, `<p4-enable>false`,
 `<ernic-tap>false` and `<logs-enable>false` all are.
 
 **`rocm-golden.xml` has four jobs, and an edit to it lands on all four:**
@@ -2595,6 +2657,37 @@ absolute path and pass `--xml`, or export `QEMU_TOOL_SRC`. And a
 in force `COMPOSE_DISABLE_ENV_FILE` is set. `compose` does not regenerate and does not edit `<vm-count>`: a
 re-render stays a typed `gen-compose --output-dir`.
 
+**Three more elements take one integer for each guest, since 2026-11-26:
+`<vm-nvme>`, `<vm-vcpus>` and `<vm-vmem>`** (kind `ints`). The
+`FleetConfig` fields are tuples: `(4,)` for `<vm-vcpus>4`, `(1, 24)` for
+`<vm-nvme>1,24`. `fleet_xml.per_vm(values, count, element)` gives each guest
+its value and raises on any other length; `gen_compose._each_vm` turns that
+into the usual error. What follows from the type:
+
+- A `FleetConfig` built in code may still pass one integer
+  (`__post_init__` wraps it), but an attribute assigned afterwards is not
+  wrapped: `cfg.vm_nvme = 0` is a bug, `cfg.vm_nvme = (0,)` is right.
+- Readers that want one number say which guest decides. `min()` where
+  every guest needs it (`<vm-pci-mmio-bridge>`, `--hipfile-test`); `max()`
+  or `any()` where one guest is enough (`<vm-nvme-vram>`,
+  `<vm-nvme-block-size>`, `<vm-nvme-size>`).
+- `settings.vm_overrides` applies a single value and ignores a list, as it
+  does for `<vm-filesystem>`: a `run-vm --xml` outside a stack cannot know
+  which guest it is.
+- `quick-start` sizes every guest alike (`overlay-sized.xml` writes one
+  value for `<vm-vcpus>` and `<vm-vmem>`), which replaces a list in the
+  fleet file. `--no-size-from-host` keeps the file's.
+- The schema pattern is the integer form once or more with commas between.
+  That a list has `<vm-count>` items is the generator's to check.
+
+**`<vm-nvme-size>` sizes every scratch drive** (`run-vm --nvme-size`,
+`VMConfig.nvme_size`, `config.nvme_size()` the one check: a whole number and
+`K`, `M`, `G` or `T`). Sparse; empty is run-vm's 1024G and renders nothing,
+and the flag is rendered only on a guest that has a drive on a qcow2.
+`NVME_SIZE` in `run_vm.py` is still the default, for `libvirt_xml`. A
+scratch file that exists keeps its size: run-vm creates one only when it is
+absent.
+
 Three elements are per-VM comma-lists — `<vm-shm-size>`, `<rocjitsu-config>`
 and `<vm-filesystem>`: one value broadcasts, `<vm-count>` values apply
 positionally, any other length is an error naming the element and both
@@ -3001,6 +3094,355 @@ role changes and `quick-start --flavor xio --xio-test` picks them up.
 - **The branch has to build as the role builds it**: `xio-tester` and the
   `rocm-xio` kernel module, with ROCm and the kernel headers in the guest.
   `feat/vfu-doorbell` building that way is **not established**.
+
+## The storage stack
+
+`qemu/stacks/storage.xml` renders to `qemu/compose/storage/`, and
+`qemu-tool quick-start --flavor storage` runs it: two guests that are not
+alike, and a test of every storage path between them. Added on 2026-11-26,
+asked for by the owner. It is the one shipped fleet whose guests differ,
+and what made that expressible is under "Settings": the `vm` attribute of a
+`<server>`, an integer for each guest in `<vm-nvme>`, and `<vm-nvme-size>`.
+
+| Guest | How the fleet file says it | In the guest |
+|---|---|---|
+| `storage-client-1`, the GPU client | `<server type='ernic' id='mesh'/>`; `id='s3' vm='client'` with `<backend type='s3'>`; `id='nvmeof' vm='client'` with `<backend type='nvmeof'>`; `<server type='rocjitsu' id='gpu0' vm='client'/>`; `<server type='sdxi' id='sdxi0'/>`; the first value of `<vm-nvme>1,24` | `rocm-ernic0` (mesh, `192.168.100.11`), `rocm-ernic1` (S3), `rocm-ernic2` (NVMe-oF), a gfx1250 at `02:00.0`, `/dev/sdxi0`, one 8 TiB `nvme0n1` |
+| `storage-server-1`, the storage server | the entries with no `vm`, and the second value of `<vm-nvme>` | `rocm-ernic0` (mesh, `192.168.100.14`), `/dev/sdxi0`, no GPU and no `/dev/kfd`, `nvme0n1` to `nvme23n1` at 8 TiB each |
+
+- **The mesh NIC is first in the block**, so it is `rocm-ernic0` and the
+  guest's address in both. `tests/test_storage_flavor.py` holds the role's
+  NIC names (`rocm-ernic1` for S3, `rocm-ernic2` for NVMe-oF) to the fleet
+  file's entry order.
+- **The two stores inside the client's NICs are on different networks.**
+  Both backends answer on `192.168.200.1` unless told otherwise, and one
+  guest cannot have two NICs on one /24, so the S3 entry says
+  `ip=192.168.201.1`. It also says `bucket=hipobj-test`: hipObject's
+  `minio-getput-rdma` has that bucket name built in, and the backend's own
+  default, `ernic`, makes every PUT a 400 (read from hipObject's
+  `hipobject-hardware-test-s3-backend.yml`, not seen here).
+- **The S3 store answers ARP itself and the NVMe-oF one does not**, so the
+  client gives the S3 NIC an address and nothing else, and the NVMe-oF NIC
+  an address and a permanent neighbour entry. The second is
+  `rocm_xio_setup`'s `nvmeof` tasks, included with the storage role's
+  variables.
+- **The client has a Key Value namespace on each side of a fabric**: NSID
+  2 of the NVMe-oF target in its NIC, over RDMA, and an SPDK vfio-user
+  controller on PCIe (`<server type='spdk' id='nvme-kv' vm='client'>`,
+  `[4e58:0001]` at `06:00.0`, model `SPDK bdev Controller`), added on
+  2026-11-26 at the owner's request. It is the xio fleet's `<spdk-image>`;
+  `SpdkImage` in `tests/test_image_tag_consistency.py` holds the two
+  fleets to one image and to QEMU's `vfu`. Its server spins one host core
+  and takes 1 GiB, as in the xio stack.
+- **25 drives of 8 TiB are sparse files.** `run-vm` creates each on first
+  boot, and one the tests never wrote was 320 KiB. After a clean `all` and
+  a second `test` the whole images directory, the 7.5 GiB backing image
+  included, was 9.3 GiB.
+- **`<ernic-tap>` is on, and the tap goes to the mesh NICs only.** NVMe-oF
+  and NFS between the guests need addresses that answer, which is the TAP.
+  A NIC with a backend of its own gets no tapsetup sidecar, no `l2`
+  network and no `-T tap0`: this stack is the first with both a TAP and
+  backend NICs, so the generator learned the difference here.
+- **`<vm-nvme-vram>` is on and reaches the client alone**: its drive may
+  DMA into its GPU's BAR. The server has no GPU to point at.
+- **No P4, and nothing in CI boots it.** `Gen Compose Check` renders it.
+
+**`test` needs no switch**, unlike the xio flavor's `--xio-test`: testing
+storage is what this flavor is for. `quick_start._STORAGE_PLAYBOOK` is
+`vm-storage.yml`; it is not in `_RDMA_TEST_PLAYBOOKS`, so the default
+flavor's optional tests are refused here and the ernic byte counter is not
+asked. A run has to leave a `storage: ` line in
+`<artifacts>/storage-<client>.md` for each client (`_storage_recorded`, and
+the count of `client` in `<vm-roles>`), or it is not a pass.
+
+**`vm-storage.yml` is four plays.**
+
+1. `fleet`: requires at least one guest in each of the inventory groups
+   `fleet_client` and `fleet_server`, which the generator writes from
+   `<vm-roles>`.
+2. `fleet_client`: the GPU firmware from the live rocjitsu and the amdgpu
+   probe, as `vm-xio.yml` does for its guest.
+3. `fleet_server`: `storage_setup` `tasks_from: server`.
+4. `fleet_client`, `serial: 1`: `hipobject_setup`, then `storage_setup`
+   `tasks_from: client` and `tasks_from: tests`, then the result written to
+   the controller, `storage-<client>.md`, **before** it is asserted. One
+   client at a time and each against the first server, because the tests
+   write the server's namespaces raw. More than one of either has not been
+   run.
+
+**The server** (`roles/storage_setup/tasks/server.yml`):
+
+- `storage-drives.sh` lists the guest's own drives: namespace 1 of each
+  controller on the `pcie` transport that has a block device, **in the
+  order of the number each controller's serial ends in**, not of the
+  kernel's instance numbers. The kernel numbers controllers in probe
+  order, which changed between two boots of the server: the export's
+  drive was `nvme8n1` on one and another file on the next, and the role
+  made a new filesystem. `run-vm` cuts a long name from the front to fit a
+  serial, so only the number at the end is compared.
+- `storage-nvmet-target.sh` makes the kernel's NVMe-oF target through
+  configfs: one subsystem, `nqn.2026-11.io.qemu-tool:storage`, with the
+  first `storage_setup_nvmet_drives` (8) drives as namespaces 1 up, on one
+  RDMA port at the guest's mesh address, 4420. Not `nvmet-test`, which is
+  the name of the target inside a NIC. It finds a target that is already
+  as asked and refuses one that is not, since a host may be connected.
+- The next drive gets ext4 and is the NFS export, `/srv/storage-nfs`.
+  **`mkfs.ext4 -T largefile4` and `mount -o noinit_itable`, both on
+  purpose**: ext4's defaults on 8 TiB are tens of gigabytes of inode
+  tables, zeroed in the background into a sparse file on the host. That
+  figure is arithmetic (65536 block groups of 2 MiB of inode table each),
+  not something run. The mkfs took about a minute.
+- NFS over RDMA is `/etc/nfs.conf.d/storage-rdma.conf` (`rdma=y`,
+  `rdma-port=20049`), `rpcrdma` loaded, and an export to
+  `192.168.100.0/24` in `/etc/exports.d`.
+- Nothing is persisted: no fstab entry, no target service. A guest that
+  restarts is put back by the next `test`.
+
+**The client** (`client.yml`): `nvme-fabrics`, `nvme-rdma` and `rpcrdma`;
+the NVMe-oF controller in its NIC; an address on the S3 NIC; `nvme connect
+-t rdma` to the server's target; `mount -t nfs4 -o
+rdma,port=20049,vers=4.2`. `storage-namespaces.sh` finds a subsystem's
+block namespaces.
+
+**The tests** (`tests.yml`): one script a path, each printing one line,
+`storage <name>: ok ...` or `storage <name>: FAIL: ...`. Every test runs
+whether or not the one before it passed; the play fails at the end.
+
+| Test | What it does |
+|---|---|
+| `local-nvme` | `storage-test-lba.sh`: 16 MiB of random data to the client's own drive through `O_DIRECT`, read back, compared by digest |
+| `nic-nvmeof-lba` | the same on the block namespace of the controller inside the NIC |
+| `nic-nvmeof-kv` | `storage-test-kv.sh`: Store, Retrieve, Exist and Delete of one key in that controller's Key Value namespace, with `nvme io-passthru` on its generic device |
+| `pcie-spdk-kv` | the same script on the SPDK NVMe controller on PCIe: its one namespace, `kv:mem`, NSID 1. `storage-kv-device.sh` finds the controller by its serial, `STORAGE-KV` |
+| `server-nvmeof-first`, `-last` | the same block test on NSID 1 and NSID 8 of the server's target |
+| `nfs-rdma` | the mount is `proto=rdma`; then `storage-test-file.sh`: a 32 MiB file written, the page cache dropped, read back and compared |
+| `s3-http` | `curl` lists the bucket |
+| `hipfile-local-nvme`, `hipfile-server-nvmeof`, `hipfile-nfs-rdma` | `storage-test-hipfile.sh`: a 32 MiB file read into GPU memory through hipFile and checked, from each of three filesystems; see below |
+| `hipobject-s3-host`, `-gpu` | `storage-test-hipobject.sh`: `minio-getput-rdma` puts 1 MiB to the store and gets it back, from host memory and from GPU memory, as the login user |
+
+- **hipObject's exit status is not the answer.** The program exits 0 when
+  it fell back to plain HTTP. The script requires its `Data integrity
+  check passed` line and, from its `hipobj-stats:` line, at least one PUT
+  and one GET over RDMA and none over HTTP. It sets `HIPOBJ_NIC_HINT`:
+  without it hipObject walks the GPU's topology for a NIC, which an
+  emulated guest does not have.
+- **The block tests refuse a device that is mounted**, since they write it
+  raw.
+- **Three hipFile tests, added at the owner's request the same day**:
+  `hipfile-local-nvme`, `hipfile-server-nvmeof` and `hipfile-nfs-rdma`.
+  `storage-test-hipfile.sh` runs the GEMM bench
+  (`rocjitsu_setup/files/gemm-hipfile-bench.hip`, compiled in the guest
+  with `hipcc -O2`), which writes a 32 MiB payload in a directory, reads it
+  into a GPU buffer through hipFile and compares a GEMM over it with the
+  host's. The directories are ext4 on the client's own drive, ext4 on the
+  **second** namespace of the server's target (the raw tests write the
+  first and the last), and a directory on the NFS mount. Both filesystems
+  are made with `-T largefile4` and mounted `noinit_itable`, and unmounted
+  in an `always` section.
+  - **Each read has to take hipFile's direct path (AIS), and fails when it
+    does not.** The owner's correction of 2026-11-26: hipFile falls back,
+    silently, to reading into a bounce buffer in host memory and copying
+    to the GPU, and a fallback verifies just as well, so "verified" alone
+    says nothing about the path. The script therefore runs the bench with
+    `HIPFILE_ALLOW_COMPAT_MODE=false`, last in its environment so a caller
+    cannot turn it back on, and requires the bench's `compat_allowed=no`
+    line, so a bench that ignored the variable is not a pass either.
+  - **`HIPFILE_UNSUPPORTED_FILE_SYSTEMS=true` is what gives NFS the direct
+    path.** hipFile takes the direct path for ext4 with ordered journaling
+    and XFS, and refuses any other filesystem unless that variable is
+    true. Seen on the client with the fallback refused: without it the NFS
+    read failed, `warm hipFileRead block 0 returned -5030 of 1048576`,
+    exit 2; with it, it passed. The first version of this test allowed the
+    fallback and so passed without the variable, at half the rate
+    (95.0 against 196.7 MB/s): that was the bounce buffer.
+  - **The bench was changed to allow this.** `gemm-hipfile-bench.hip`
+    refused to run with `HIPFILE_ALLOW_COMPAT_MODE` set false ("unset it or
+    set it to true"). It now leaves a caller's value alone, prints
+    `compat_allowed=yes|no`, and with the fallback refused does not retry
+    an open without `O_DIRECT`. Unset, it still sets the variable true
+    itself, so the daily report and `quick-start --hipfile-test` behave as
+    they did; neither was rerun.
+  - Not used, and why: hipFile's `ais-stats` tool and `HIPFILE_STATS_LEVEL`
+    are in the guest (`/opt/rocm/core-10.2/bin/ais-stats`), and so is
+    `hsa-snoop`. A counter read after the fact has to be matched to the
+    process and the read; a read that fails is simpler to trust. The
+    amdgpu line `AIS: registered 1024MB device memory` was in the client's
+    dmesg.
+  - The read is run under `timeout` (240 s), because a hipFile direct read
+    from a target that is not a local NVMe has hung a guest for good (known
+    issue 15). None hung here.
+- No SDXI test: `/dev/sdxi0` was seen in both guests and nothing copies
+  through it here.
+- **hipObject's two tests are not held to a direct path the way hipFile's
+  are.** They require every PUT and GET over RDMA and none over HTTP, from
+  hipObject's own counters. Whether the `gpu` buffer was registered as a
+  dma-buf or staged through host memory (hipObject has a "host-staged
+  fallback" for registration) is not asked.
+
+**`hipobject_setup`** builds hipObject at `develop`,
+`612d86f241ae3fa63625d42ecaa36418bef2962b`, with the pin, fetch script and
+stamp (`/etc/hipobject.json`) of `rocm_xio_setup`. CMake with Ninja:
+`-DHIPOBJ_IONIC=ON -DHIPOBJ_BNXT=OFF -DHIPOBJ_MINIO_CLIENT=ON
+-DBUILD_TESTING=OFF`, installed under `/opt/hipobject`, on no PATH, with
+`minio-getput-rdma` copied into its `bin/`: hipObject builds that program
+and does not install it.
+
+- **It installs no rdma-core development package**, and must not: a golden
+  guest has one rdma-core to build against. hipObject loads libibverbs
+  with `dlopen`. hipObject's own Ansible playbook runs
+  `sbates130272.batesste.rdma_setup`, which installs `libibverbs-dev`;
+  that is why this is a role of our own.
+- **The configure step fetches five more repositories from GitHub**
+  (minio-cpp, curlpp, inih, nlohmann_json, pugixml), at tags or commits
+  hipObject's CMake names. None is pinned here.
+- It is after boot and not baked, by the owner's decision of 2026-11-25:
+  the fleets' image does not have to move for the flavor to run.
+- The pin is the role's default alone. There is no `<hipobject-ref>`
+  element; `-e hipobject_setup_ref=... -e hipobject_setup_commit=...`
+  through `ANSIBLE_EXTRA_ARGS` is not wired either. Moving the pin is the
+  two defaults, with the comment that ends the commit's line.
+
+**Run on the dev host, 2026-11-26**, by hand, from this worktree, which was
+uncommitted: scratch `--stack-dir`, `--key-dir` and `--images`, guests of
+`20261119.g2aea67d` sized by `quick-start` to 8 vCPU and 8192 MiB each,
+the fork pair, guest SSH on 2522 and 2523, Grafana moved to 3003.
+`AMD_CERT` was set, so the playbook installed the corporate CA into the
+scratch overlays. Docker 29.1.3 on WSL2. The guests of these first runs
+were named `storage-1` and `storage-2`: `<vm-roles>` and the names it gives
+came later the same day, with the three hipFile tests.
+
+| Step | Result |
+|---|---|
+| `quick-start --flavor storage --clean-overlays all`, from new overlays and no drives | exit 0 in 7 m 39 s; `storage-1` ok=76 changed=26 failed=0, `storage-2` ok=25 changed=12 failed=0; `storage: pass, 9 of 9 tests passed, storage-1 to storage-2` |
+| `test` again | exit 0 in 48 s; ok=66 and ok=24, failed=0; 9 of 9; hipObject `already built` |
+| the server, before any playbook | 24 `QEMU NVMe Ctrl` drives of 8T, 24 controllers in `lspci`, `rocm-ernic0` at `192.168.100.14`, one HCA, `/dev/sdxi0`, no `/dev/kfd`, `is-system-running` `running` |
+| the client, before any playbook | three HCAs, `rocm-ernic0` to `2` at `.11`, `.12`, `.13`, the GPU at `02:00.0`, SDXI at `05:00.0`, one 8T drive |
+| the pinned kernel's config | `CONFIG_NVME_TARGET=m`, `CONFIG_NVME_TARGET_RDMA=m`, `CONFIG_NVME_RDMA=m`, `CONFIG_NFSD=m`, `CONFIG_NFSD_V4=y`, `CONFIG_SUNRPC_XPRT_RDMA=m` |
+| the client's view of the server | `nvme connect` logged `new ctrl: NQN "nqn.2026-11.io.qemu-tool:storage", addr 192.168.100.14:4420`; eight 8T namespaces; `/mnt/storage-nfs` mounted `proto=rdma` |
+| `qemu-tool list`, `inspect storage-2` | the server's GPU column is `-`, NVMe `emul*24`; `inspect` lists 24 drives at 8.0 TiB |
+
+The nine lines of the clean run, each one run:
+
+```
+storage local-nvme: ok, 16 MiB written to /dev/nvme0n1 and read back identical, 394.1 MiB/s
+storage nic-nvmeof-lba: ok, 16 MiB written to /dev/nvme1n1 and read back identical, 488.7 MiB/s
+storage nic-nvmeof-kv: ok, 65536 bytes stored under a key in /dev/ng1n2 nsid 2, retrieved identical and deleted
+storage server-nvmeof-first: ok, 16 MiB written to /dev/nvme2n2 and read back identical, 142.1 MiB/s
+storage server-nvmeof-last: ok, 16 MiB written to /dev/nvme2n8 and read back identical, 139.6 MiB/s
+storage nfs-rdma: ok, 32 MiB written to /mnt/storage-nfs (nfs4) and read back identical, 121.5 MiB/s
+storage s3-http: ok, http://192.168.201.1:9000/hipobj-test/ lists the bucket
+storage hipobject-s3-host: ok, 1048576 bytes put and got over RDMA on rocm-rdma-ernic1 (nogpu buffer), verified; hipobj-stats: rdma_put=1 rdma_get=1 http_put=0 http_get=0 rdma_bytes=2097152 http_bytes=0
+storage hipobject-s3-gpu: ok, 1048576 bytes put and got over RDMA on rocm-rdma-ernic1 (gpu buffer), verified; hipobj-stats: rdma_put=1 rdma_get=1 http_put=0 http_get=0 rdma_bytes=2097152 http_bytes=0
+```
+
+The rates are a 16 or 32 MiB write and read timed together, once. They say
+the path works, and are not benchmarks.
+
+**What the runs before that one found**, each fixed and then seen passing:
+
+- `/etc/exports.d` does not exist on the image; the role makes it.
+- **The NFS package starts the server when it is installed**, before the
+  RDMA settings are written, so "the settings did not change" on a rerun
+  did not mean the running server had them: `/proc/fs/nfsd/portlist` read
+  `tcp 2049` alone. The role asks the portlist and restarts the server
+  when `rdma 20049` is not in it.
+- `exportfs -v` puts a long path on a line of its own, so a match for the
+  path followed by white space failed on a good export. The check reads
+  `exportfs -s`.
+- **The kernel's target is multipath-capable, and its namespaces hang off
+  the subsystem.** `/sys/class/nvme/nvme2/` held only `nvme2c2n1` to `n8`,
+  path devices with no node in `/dev`; the disks were `nvme2n1` to `n8`
+  under `nvme-subsys2`. The first lookup walked the controller, as
+  `rocm_xio_setup`'s does for the target in a NIC (which is not
+  multipath, so that one is right), and found nothing.
+  `storage-namespaces.sh` goes by `/sys/block/nvme*/device/subsysnqn`,
+  which reads the same either way.
+- **By NSID, not by name**: on the clean run NSID 1 of the server's target
+  was `/dev/nvme2n2`.
+
+**After the names, roles, hipFile tests and statistics were added**, the
+same day and host: `all` from new overlays exited 0, ok=84 and ok=23,
+`storage: pass, 12 of 12 tests passed, storage-client-1 to
+storage-server-1`, and a second `test` passed 12 of 12. The three new
+lines of the first:
+
+```
+storage hipfile-local-nvme: ok, 33554432 bytes read from /mnt/storage-hipfile-local (ext4) into GPU memory through hipFile and verified, 718.4 MB/s, compat_requested=self buf_registered=yes
+storage hipfile-server-nvmeof: ok, 33554432 bytes read from /mnt/storage-hipfile-nvmeof (ext4) into GPU memory through hipFile and verified, 170.3 MB/s, compat_requested=self buf_registered=yes
+storage hipfile-nfs-rdma: ok, 33554432 bytes read from /mnt/storage-nfs/hipfile (nfs4) into GPU memory through hipFile and verified, 198.7 MB/s, compat_requested=self buf_registered=yes
+```
+
+**After the SPDK controller and the refused fallback**, the same day: a
+`test` on a stack recreated with the controller passed, `storage: pass, 13
+of 13 tests passed`. The lines that were new or changed:
+
+```
+storage pcie-spdk-kv: ok, 65536 bytes stored under a key in /dev/ng0n1 nsid 1, retrieved identical and deleted
+storage hipfile-local-nvme: ok, 33554432 bytes read from /mnt/storage-hipfile-local (ext4) into GPU memory through hipFile's direct path (fallback refused) and verified, 793.5 MB/s
+storage hipfile-server-nvmeof: ok, 33554432 bytes read from /mnt/storage-hipfile-nvmeof (ext4) into GPU memory through hipFile's direct path (fallback refused) and verified, 157.5 MB/s
+storage hipfile-nfs-rdma: ok, 33554432 bytes read from /mnt/storage-nfs/hipfile (nfs4) into GPU memory through hipFile's direct path (fallback refused) and verified, 174.3 MB/s
+```
+
+Two faults in the test tasks were found on the way, and each has a test:
+
+- **A folded scalar keeps the line break after a more-indented line.** The
+  SPDK test's `cmd: >-` had the NSID on a line of its own after a wrapped
+  expression, so the script got two arguments and `1` was run as a
+  command: exit 127, no result line. The NSID is on the expression's
+  closing line now.
+- **A test that failed with no line was not shown, and the summary said
+  "12 of 12 tests passed" beside `FAIL`.** The script module runs on a
+  terminal, so a script's stderr arrives in its stdout; the collector
+  took `ok` lines from one stream and `FAIL` lines from the other. It
+  reads both now, and the count is of the tests that ran
+  (`storage_setup_ran_count`), not of the lines they left.
+
+**NFS statistics need no exporter of their own.** node_exporter is in the
+image and the `fleet-node` job scrapes it. Read off the live guests:
+
+- the server exported 90 `node_nfsd_*` series, and
+  `count(node_nfsd_requests_total)` answered 74 in Prometheus;
+- the client exported 105 `node_nfs_*` series;
+- the per-mount collector is off by default. `storage_setup`'s client tasks
+  rewrite the `ARGS=` line of `/etc/default/prometheus-node-exporter` to
+  add `--collector.mountstats` beside the textfile directory the image's
+  line names, restart the service and require a `node_mountstats_nfs_`
+  series. The client then exported 613, among them
+  `node_mountstats_nfs_transport_connect_total{...,protocol="rdma"} 1`.
+  `storage_setup_mountstats: false` leaves the line alone.
+- No Grafana panel reads any of it, and there is no NVMe-oF target
+  exporter: nothing reports `nvmet` statistics.
+
+**The lane is `qemu-minimal-report-for-storage.yml`**: on pushes to main
+that touch the stack, daily, and by dispatch; never on a pull request.
+`quick-start --flavor storage up` and `test` in the fleet's QEMU image,
+with `--in-network`, then `scripts/storage-report.py`, which reads every
+`storage-<client>.md` and writes `storage-report.md` and one
+`badge-storage-*.json` for each tracked rate of the first client. A badge
+is written only for a test that passed and reported a rate. Two artifacts,
+`report-storage` and `perf-storage`; publish-pages fetches the second by
+name, `METRICS` in `render-site-perf.py` has the five (`storage-nic-nvmeof`,
+`storage-nvmeof`, `storage-nfs`, `storage-hipfile-nvmeof`,
+`storage-hipfile-nfs`), and the README has an endpoint badge for each and a
+status badge for the lane. `TheLane` and `TheReport` in
+`tests/test_storage_flavor.py` hold the names together. **The lane has
+never run.** On a 4-core runner the guests get the 4 vCPU floor, two to
+one oversubscribed, which no storage run has been at. The rates are one
+small transfer each and will move between runs: a red badge there is
+noise before it is a regression.
+
+**Not run**: any lane, and the flavor on any other host; guests at the
+fleet file's 4 vCPU; a hipObject object larger than 1 MiB (known issue 18's
+16 MiB limit is the mesh's, and the S3 NIC is not on the mesh; untried
+either way); fio or any sustained I/O; more than eight namespaces through
+the target, so `storage_setup_nvmet_drives` at 23 is untried; the 15
+drives the server neither serves nor exports, beyond their being listed;
+a server guest restarted between `test` runs; `ansible-lint` in CI on the
+two roles (locally they report only the `schema[meta]` finding for `noble`
+that this host reports for every role); `storage-nvmet-target.sh`,
+`storage-drives.sh`, `storage-test-lba.sh` and `storage-test-file.sh`
+anywhere but on those guests, since they need root and block devices and
+have no unit test; a `.deb` or wheel build with the new stack in it; and
+nobody has looked at Grafana for this stack.
 
 ## `qemu-tool check`
 
@@ -7924,11 +8366,11 @@ interfaces.
   private names off (`filters: ["!^_"]`); members in source order;
   signatures separate, with annotations; source on.
   `show_if_no_docstring: true`, so a public function with no docstring is
-  listed with its signature and source: 48 of the 141 public top-level
+  listed with its signature and source: 48 of the 147 public top-level
   functions and classes have none, and `caps`, `cli`, `list_vms`, `qcow`
   and `shutdown` would otherwise show no member at all. Module constants and
   dataclass fields are listed for the same reason, which is what makes
-  `FleetConfig` 77 entries long. `tests/test_api_docs.py` holds those
+  `FleetConfig` 79 entries long. `tests/test_api_docs.py` holds those
   three numbers, and the count of pages, to the tree.
 - **Nothing is silenced.** The build is `--strict` and logs no warning;
   no griffe or mkdocs message is filtered.

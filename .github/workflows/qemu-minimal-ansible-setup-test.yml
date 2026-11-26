@@ -97,6 +97,12 @@ jobs:
       run: ansible-playbook --syntax-check playbooks/vm-xio.yml
       working-directory: ansible
 
+    # The storage flavor's playbook. Nothing in CI runs it: it needs the
+    # storage stack's two booted guests.
+    - name: Syntax-check vm-storage playbook
+      run: ansible-playbook --syntax-check playbooks/vm-storage.yml
+      working-directory: ansible
+
     # Every repo-local role, at the `production` profile. The playbooks
     # beside them are not clean at that profile yet, so they are not listed.
     # pipx, not pip: the CI image's interpreter is externally managed (PEP
@@ -111,8 +117,9 @@ jobs:
         # auto-discovery finds only roles, not the sibling playbooks/*.yml
         # files (which are not yet clean at the production profile).
         ansible-lint \
-          bake_ccache/ fio_hipfile_setup/ image_slim/ perftest_setup/ \
-          rocjitsu_setup/ rocm_ernic_setup/ rocm_xio_setup/ sdxi_setup/
+          bake_ccache/ fio_hipfile_setup/ hipobject_setup/ image_slim/ \
+          perftest_setup/ rocjitsu_setup/ rocm_ernic_setup/ rocm_xio_setup/ \
+          sdxi_setup/ storage_setup/
       working-directory: ansible/playbooks/roles
 
   gen-vm-ansible-setup:

@@ -1376,7 +1376,7 @@ class Summary(unittest.TestCase):
         # The hipFile test is offered to a fleet with an NVMe namespace:
         # the image the fleets pull has the SDK and hipcc it needs, and a
         # guest with no baked fio still passes.
-        golden.vm_nvme = 0
+        golden.vm_nvme = (0,)
         text = said(golden)
         self.assertIn("qemu-tool quick-start test --sdxi-test\n", text)
         self.assertNotIn("--hipfile-test", text)
@@ -1385,7 +1385,7 @@ class Summary(unittest.TestCase):
         # be refused. helios-tray has an SDXI device and NVMe namespaces.
         helios = qs.FleetXml.parse(REPO / "qemu/stacks/helios-tray.xml")
         self.assertGreaterEqual(helios.sdxi_per_vm, 1)
-        self.assertGreaterEqual(helios.vm_nvme, 1)
+        self.assertGreaterEqual(min(helios.vm_nvme), 1)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             qs._summary(_state(fleet=helios, playbook=None))
@@ -1682,7 +1682,7 @@ class Hipfile(unittest.TestCase):
             qs._check_optional_tests(_state(hipfile_test=True))
         self.assertEqual(err.getvalue(), "")
         golden = qs.FleetXml.parse(GOLDEN_FLEET)
-        self.assertGreaterEqual(golden.vm_nvme, 1)
+        self.assertGreaterEqual(min(golden.vm_nvme), 1)
         self.assertIs(golden.vm_nvme_vram, True)
 
     def test_a_fleet_with_no_nvme_namespace_is_refused(self):
@@ -1716,7 +1716,7 @@ class Hipfile(unittest.TestCase):
         nullb.write_text(f'<fleet xmlns="{qs.NS_FLEET}"><vm-count>2'
                          "</vm-count><vm-nvme>-2</vm-nvme></fleet>\n")
         parsed = qs.FleetXml.parse(nullb)
-        self.assertEqual(parsed.vm_nvme, -2)
+        self.assertEqual(parsed.vm_nvme, (-2,))
         said = self._refused(_state(base_layers=[nullb], fleet=parsed,
                                     hipfile_test=True))
         self.assertIn(f"--hipfile-test: <vm-nvme> is -2 in {nullb}, which "
