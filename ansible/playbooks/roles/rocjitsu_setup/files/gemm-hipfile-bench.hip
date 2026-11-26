@@ -166,13 +166,13 @@ int main(int argc, char** argv) {
     const char* compat_env = ::getenv("HIPFILE_ALLOW_COMPAT_MODE");
     const bool compat_from_caller = compat_env != nullptr;
     const bool compat_enabled = env_is_true(compat_env);
+    // Unset, the bench allows hipFile's fallback itself, so that a guest
+    // whose storage cannot take the direct path still reads. A caller that
+    // sets it false is asking for the opposite: a read that cannot go
+    // direct to GPU memory has to fail, and hipFile then fails it.
+    const bool compat_allowed = !compat_from_caller || compat_enabled;
     if (!compat_from_caller) {
         ::setenv("HIPFILE_ALLOW_COMPAT_MODE", "true", 0);
-    } else if (!compat_enabled) {
-        std::fprintf(stderr,
-                     "gemm-hipfile-bench: HIPFILE_ALLOW_COMPAT_MODE is set but "
-                     "disabled; unset it or set it to true for this benchmark.\n");
-        return 2;
     }
 
     hipDeviceProp_t prop{};
@@ -259,6 +259,14 @@ int main(int argc, char** argv) {
 
     FdGuard file;
     file.fd = ::open(path.c_str(), O_RDONLY | O_DIRECT);
+    if (file.fd < 0 && !compat_allowed) {
+        std::fprintf(stderr,
+                     "gemm-hipfile-bench: open %s O_DIRECT failed: %s; the "
+                     "direct path needs it and HIPFILE_ALLOW_COMPAT_MODE is "
+                     "false\n",
+                     path.c_str(), std::strerror(errno));
+        return 2;
+    }
     if (file.fd < 0) {
         std::fprintf(stderr,
                      "gemm-hipfile-bench: open %s O_DIRECT failed: %s; retrying "
@@ -318,6 +326,8 @@ int main(int argc, char** argv) {
     std::printf("gemm-hipfile-bench: compat_requested=%s buf_registered=%s\n",
                 compat_from_caller ? "caller" : "self",
                 buf_registered ? "yes" : "no");
+    std::printf("gemm-hipfile-bench: compat_allowed=%s\n",
+                compat_allowed ? "yes" : "no");
 
     for (size_t blk = 0; blk < kBlocks; ++blk) {
         // hipFileRead's second argument is buffer_base -- the base of the
