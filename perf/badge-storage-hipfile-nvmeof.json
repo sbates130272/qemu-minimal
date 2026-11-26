@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "hipFile NVMe-oF",
-  "message": "n/a",
-  "color": "lightgrey"
+  "message": "194 MB/s",
+  "color": "blue"
 }

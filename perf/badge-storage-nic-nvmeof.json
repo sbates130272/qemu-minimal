@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "NVMe-oF in NIC",
-  "message": "n/a",
-  "color": "lightgrey"
+  "message": "144 MB/s",
+  "color": "blue"
 }
