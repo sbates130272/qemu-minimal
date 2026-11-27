@@ -585,6 +585,9 @@ class FleetConfig:
     vm_username: str = "ubuntu"
     vm_password: str = ""
     vm_filesystem: str = ""
+    # Whether guests may write the share. Off, every qemu-N gets
+    # run-vm --filesystem-readonly and the directory is bound read-only.
+    vm_filesystem_writable: bool = False
     # True, matching VMConfig: off leaves a GPU with a 16M 32-bit BAR that
     # amdgpu cannot initialise. See the comment on VMConfig.vfio_user_root_port.
     vm_vfio_user_root_port: bool = True
@@ -1054,11 +1057,18 @@ _SECTIONS: tuple[_Section, ...] = (
                  "the word password"),
         _Setting(
             "vm-filesystem", "vm_filesystem", _STR,
-            help="Host directory shared into each guest over 9p with mount tag "
-                 "hostfs",
+            help="Host directory shared into each guest over 9p, mounted at "
+                 "/mnt/host; read-only unless vm-filesystem-writable",
             form="one host path for all guests, or a comma list of exactly "
                  "vm-count paths; run-vm --xml outside a stack ignores a list; "
                  "default empty, no share"),
+        _Setting(
+            "vm-filesystem-writable", "vm_filesystem_writable", _BOOL,
+            sparse=True,
+            help="Let guests write the vm-filesystem share; what they write "
+                 "is the file of the user the stack runs as",
+            form="true or false; default false, the share is read-only; "
+                 "refused with no vm-filesystem"),
         _Setting(
             "vm-vfio-user-root-port", "vm_vfio_user_root_port", _BOOL,
             help="Put each vfio-user device behind a PCIe root port; off, an "

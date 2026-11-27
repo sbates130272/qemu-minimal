@@ -119,6 +119,11 @@ rocm_ernic_setup_nic_subnet: "192.168.100"
 # gets only when the host passed no name. Off, the guest is ernic-vm-<n>
 # whenever it has an emulated NIC, as it was before 2026-11-18.
 rocm_ernic_setup_hostname: true
+# Mounts the directory a host shares (`qemu-tool run-vm --filesystem`, a
+# fleet's <vm-filesystem>) at /mnt/host at boot, and gives it to this user
+# when the host user's uid is another; see tasks/hostfs.yml.
+rocm_ernic_setup_hostfs: true
+rocm_ernic_setup_hostfs_user: "{{ vm_username | default('ubuntu') }}"
 
 # ── Metrics ──────────────────────────────────────
 # yuuki/rdma_exporter, pinned by release and by the checksum of its tarball,

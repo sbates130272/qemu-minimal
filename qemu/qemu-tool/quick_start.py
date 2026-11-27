@@ -222,6 +222,10 @@ class _State:
     # play of vm-xio.yml that installs and checks the guest half. Implies
     # xio_test, since the tools build from the checkout that play makes.
     vfu_doorbell: bool = False
+    # --filesystem: a host directory every guest gets at /mnt/host, and
+    # whether guests may write it.
+    share: Path | None = None
+    share_readonly: bool = False
 
     # ---- convenience readers -------------------------------------------
     @property
@@ -453,7 +457,8 @@ def _resolve_key_dir(requested: Path, explicit: bool) -> Path:
 # the original values half way through and waited for SSH on a port no guest
 # was published on.
 _LAYER_ORDER = ("overlay-vfu-doorbell.xml", "overlay-sized.xml",
-                "overlay-images.xml", "overlay-ports.xml",
+                "overlay-images.xml", "overlay-share.xml",
+                "overlay-ports.xml",
                 "overlay-metrics.xml", "overlay-image-login.xml")
 
 # The shipped overlay --vfu-doorbell layers onto the xio stack, and the layer
@@ -517,6 +522,69 @@ def _set_doorbell_layer(state: _State, on: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(shipped.read_text())
     _rescan_layers(state)
+
+
+_SHARE_LAYER = "overlay-share.xml"
+# What a guest whose image has no qemu-tool-hostfs unit types to get the
+# share; the unit's own options, from files/qemu-tool-hostfs.sh.
+_SHARE_MOUNT = ("sudo mount -t 9p -o trans=virtio,version=9p2000.L,"
+                "msize=1048576,cache=mmap,nosuid,nodev hostfs /mnt/host")
+
+
+def _set_share_layer(state: _State) -> None:
+    """Layer --filesystem onto the stack, or take an earlier run's off.
+
+    Taken off when the flag is not given, as the doorbell layer is: a stack
+    once brought up with a share of somebody's home does not keep it because
+    a later `up` forgot to say so. A fleet file's own <vm-filesystem> is not
+    touched by that; the flag, given, outranks it.
+    """
+    path = state.stack_dir / _SHARE_LAYER
+    if state.share is None:
+        if state.share_readonly:
+            _die("--filesystem-readonly needs --filesystem DIR")
+        if path.is_file():
+            path.unlink()
+            _rescan_layers(state)
+        return
+    share = state.share.expanduser().resolve()
+    if not share.is_dir():
+        _die(f"--filesystem {state.share}: {share} is not a directory")
+    if "," in str(share) or ":" in str(share):
+        _die(f"--filesystem {share}: a path with a comma or a colon cannot "
+             "be shared")
+    home = Path.home().resolve()
+    if share == home or share in home.parents:
+        # Not refused: it is what was asked for. Said, because the guest's
+        # login is not a secret.
+        print(f"note: {share} holds your home directory. Every guest can "
+              f"read {'' if state.share_readonly else 'and change '}"
+              "everything in it you can, ~/.ssh included, and anyone who "
+              "can log in to a guest is root there. Share a project "
+              "directory if that is all the guest needs.", file=sys.stderr)
+    _write_layer(state, _SHARE_LAYER,
+                 {"vm-filesystem": str(share),
+                  "vm-filesystem-writable":
+                      "false" if state.share_readonly else "true"},
+                 "The host directory this run shares with every guest.")
+
+
+def _share_note(state: _State) -> list[str]:
+    """How a guest reaches the fleet's share; empty when there is none."""
+    if not state.fleet.vm_filesystem:
+        return []
+    mode = ("writable: what a guest writes there is your file"
+            if state.fleet.vm_filesystem_writable else "read-only")
+    return [
+        f"Shared with the guests ({mode}):",
+        "",
+        f"    {state.fleet.vm_filesystem}",
+        "",
+        "A guest image with the qemu-tool-hostfs unit has it at /mnt/host.",
+        "In an older image, in the guest:",
+        "",
+        f"    {_SHARE_MOUNT}",
+    ]
 
 
 def _refuse_recreate(state: _State, before: str | None) -> None:
@@ -2255,6 +2323,11 @@ def _summary(state: _State) -> None:
     for line in _exposure_note(state):
         print(f"  {line}")
     print()
+    share = _share_note(state)
+    for line in share:
+        print(f"  {line}")
+    if share:
+        print()
     print("  What else is here:")
     print()
     print("      qemu-tool list --summary          # what the fleet is doing")
@@ -2325,6 +2398,8 @@ def run(
     hipfile_test: bool = False,
     xio_test: bool = False,
     vfu_doorbell: bool = False,
+    share: Path | None = None,
+    share_readonly: bool = False,
 ) -> None:
     fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
 
@@ -2371,6 +2446,8 @@ def run(
         # The doorbell tools build from the checkout the rocm-xio play makes.
         xio_test=xio_test or vfu_doorbell,
         vfu_doorbell=vfu_doorbell,
+        share=share,
+        share_readonly=share_readonly,
         playbook=playbook,
         variant=variant,
     )
@@ -2384,6 +2461,10 @@ def run(
     if verb in ("all", "up"):
         _check_vfu_doorbell(state)
         _set_doorbell_layer(state, vfu_doorbell)
+        _set_share_layer(state)
+    elif share is not None or share_readonly:
+        print(f"note: --filesystem ignored: `{verb}` takes the stack as it "
+              "is. The up and all verbs read it.", file=sys.stderr)
 
     if images is not None:
         _write_layer(state, "overlay-images.xml",
@@ -2478,6 +2559,8 @@ def run(
         _refuse_recreate(state, before)
         up(state)
         if verb == "up":
+            for line in _share_note(state):
+                print(f"  {line}")
             return
 
     if verb in ("all", "test"):

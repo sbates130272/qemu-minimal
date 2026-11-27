@@ -970,6 +970,40 @@ share is bind-mounted into the qemu containers once. A bare value broadcasts to 
 `<vm-count>` applies positionally, and any other length is an error naming the
 element and both lengths.
 
+#### Sharing a host directory
+
+`qemu-tool quick-start --filesystem DIR` shares a host directory with every
+guest, and a guest image with the `qemu-tool-hostfs` unit mounts it at
+`/mnt/host`. `--filesystem-readonly` shares it read-only. In a fleet file
+it is `<vm-filesystem>`, which is read-only unless the file also says
+`<vm-filesystem-writable>true`; on `run-vm` it is `--filesystem` and
+`--filesystem-readonly`.
+
+- **On the host, everything a guest writes is your file.** QEMU makes every
+  access as the user it runs as, which in a stack is you, so the share
+  reaches nothing you could not, and a file made by root in the guest is
+  yours on the host, with its real mode. A `chown` in the guest is refused.
+  A QEMU run as root keeps the guest's ownership in extended attributes and
+  does not apply it to the host's files.
+- **In the guest, the login user owns the share.** When your uid on the
+  host is not the login user's, the unit shows the share through `bindfs`
+  with your ids mapped to theirs.
+- **Share what the guest needs.** The guest's login key is published and
+  its account has passwordless sudo, so anyone who can log in to a guest
+  can read, and unless read-only change, everything in the share.
+  `quick-start` says so when the directory holds your home.
+- A guest image baked before the unit existed mounts it by hand; the
+  command is printed when the stack comes up:
+
+  ```bash
+  sudo mount -t 9p -o trans=virtio,version=9p2000.L,msize=1048576,cache=mmap,nosuid,nodev hostfs /mnt/host
+  ```
+
+  `cache=mmap` matters: without a cache option the share reads and writes
+  at a few MB/s.
+- Build in a directory of the guest's own and keep sources in the share:
+  9p is slow on many small files.
+
 Three more take one integer for each guest the same way: `<vm-vcpus>`,
 `<vm-vmem>` and `<vm-nvme>`. `<vm-nvme>1,24</vm-nvme>` gives the first guest
 one drive and the second 24. `<vm-nvme-size>` sizes every scratch drive
@@ -1634,7 +1668,8 @@ takes every stack on the system.
 | `--nvme-recreate` | off | Delete and recreate NVMe qcow2 files on start |
 | `--nvme-vram-dev ID` | — | Let the emulated NVMe DMA into the BAR of the vfio-user device with this qdev id (its socket's file name without `.sock`); fork QEMU only. `<vm-nvme-vram>` in a fleet file |
 | `--nvme-vram-bar N` | 0 | Which BAR of that device |
-| `--filesystem DIR` | — | Host directory to share via 9p/VirtFS |
+| `--filesystem DIR` | — | Host directory to share with the guest over 9p, mount tag `hostfs`; see [Sharing a host directory](#sharing-a-host-directory) |
+| `--filesystem-readonly` | off | Share `--filesystem` read-only |
 | `--pci-testdev` | off | Enable `pci-testdev` |
 | `--pci-hostdev BDF[,BDF]` | — | VFIO PCI passthrough (repeatable or comma-sep) |
 | `--vram-dev-index N` | — | 1-based index into `--pci-hostdev` for VRAM DMA |

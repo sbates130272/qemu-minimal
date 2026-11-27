@@ -71,6 +71,8 @@ def vm_overrides(fleet: FleetConfig) -> dict[str, Any]:
     # knowable here, so only a single value is applied.
     if fleet.vm_filesystem and "," not in fleet.vm_filesystem:
         out["filesystem"] = fleet.vm_filesystem
+        if not fleet.vm_filesystem_writable:
+            out["filesystem_readonly"] = True
     if fleet.vm_extra_hostfwd:
         # Several rules for ONE VM, not one rule per VM.
         out["extra_hostfwd"] = [

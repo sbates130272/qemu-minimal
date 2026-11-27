@@ -462,6 +462,26 @@ def _qemu_args(cfg: FleetConfig) -> list[str]:
         sys.exit(f"Error: {exc}")
 
 
+def _check_filesystem(cfg: FleetConfig, count: int) -> None:
+    """<vm-filesystem>: a path Docker binds as a directory, and QEMU takes.
+
+    A path that is not absolute is a named volume to compose, not a host
+    directory, and a comma inside one path cannot be told from the list.
+    """
+    if not cfg.vm_filesystem:
+        if cfg.vm_filesystem_writable:
+            sys.exit(
+                "Error: <vm-filesystem-writable> is true and no layer sets "
+                "<vm-filesystem>: there is no share to make writable.")
+        return
+    for share in _split_per_vm(cfg.vm_filesystem, count, "<vm-filesystem>"):
+        if not share.startswith("/") or ":" in share:
+            sys.exit(
+                f"Error: <vm-filesystem> names {share!r}. Each share is an "
+                "absolute host path with no colon in it: the stack "
+                "bind-mounts it into the qemu container at the same path.")
+
+
 def _check_pci_mmio_bridge(cfg: FleetConfig) -> None:
     """<vm-pci-mmio-bridge>: the bridge is for an emulated NVMe, on the fork.
 
@@ -991,6 +1011,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
                 "/opt/vfu/vfu-doorbell (rocm-xio's CI pushes it to ghcr.io).")
     _check_xio_pin(cfg.xio_ref, cfg.xio_commit)
     _check_pci_mmio_bridge(cfg)
+    _check_filesystem(cfg, count)
 
     # The mesh counts rocm-ernic PROCESSES, not VMs. At <ernic-per-vm> > 1 the
     # two differ by that factor, and a message naming only the VM count would
@@ -1270,6 +1291,7 @@ def plan(cfg: FleetConfig) -> dict[str, Any]:
         "vm_filesystem": list(dict.fromkeys(
             _split_per_vm(cfg.vm_filesystem, count, "<vm-filesystem>")
         )) if cfg.vm_filesystem else [],
+        "vm_filesystem_writable": cfg.vm_filesystem_writable,
         "vfio_user_root_port": cfg.vm_vfio_user_root_port,
         "tcp_port": str(cfg.ernic_tcp_port),
         "stats_port": str(cfg.ernic_stats_port),
@@ -1504,8 +1526,12 @@ def render_compose(
     for share in spec["vm_filesystem"]:
         # Same path inside the container as outside: run-vm passes the path
         # straight to -virtfs, so a remapped mount point would name a
-        # directory the guest cannot see.
-        out.append(f'    - "{share}:{share}:ro"')
+        # directory the guest cannot see. Read-only unless the fleet says
+        # <vm-filesystem-writable>. Writable, the container runs as the
+        # caller, so what a guest writes there is the caller's file and
+        # nothing the caller could not have written.
+        mode = "" if spec["vm_filesystem_writable"] else ":ro"
+        out.append(f'    - "{share}:{share}{mode}"')
     out.append('    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"')
     out.append("  devices:")
     out.append("    - /dev/kvm")
@@ -1946,6 +1972,8 @@ def render_compose(
         # the last switch group.
         if spec["pci_mmio_bridge"]:
             out.append("          --pci-mmio-bridge \\")
+        if spec["vm_filesystem"] and not spec["vm_filesystem_writable"]:
+            out.append("          --filesystem-readonly \\")
         # One --qemu-arg per word, with `=` so that a word starting with a
         # dash is the option's value and not another option. Single-quoted
         # for the shell this line is run by.

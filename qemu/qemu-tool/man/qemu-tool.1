@@ -529,6 +529,24 @@ or
 .B all
 verbs.
 .TP
+.BI \-\-filesystem " DIR"
+Share a host directory with every guest, writable. A guest image with the
+.B qemu\-tool\-hostfs
+unit mounts it at
+.BR /mnt/host ,
+owned there by the login user; on the host, what a guest writes is your file.
+Read by the
+.B up
+and
+.B all
+verbs, which also drop an earlier run's share when the option is not given.
+The guests' login key is published, so share what a guest needs and not more.
+.TP
+.B \-\-filesystem\-readonly
+Share
+.B \-\-filesystem
+read-only: no guest can change it.
+.TP
 .B \-\-vfu\-doorbell
 On the
 .B xio
@@ -688,7 +706,24 @@ verbs.
 .SH RUN-VM OPTIONS
 .TP
 .BI \-\-filesystem " DIR"
-Expose a host directory to the guest via virtio-9p.
+Share a host directory with the guest over virtio-9p, mount tag
+.BR hostfs .
+A guest image with the
+.B qemu\-tool\-hostfs
+unit mounts it at
+.BR /mnt/host .
+QEMU makes every host access as the user it runs as, so the share reaches
+nothing that user could not, and a file the guest writes is that user's on
+the host whoever wrote it in the guest. A QEMU run as root keeps the guest's
+ownership in extended attributes instead of applying it to the host's files.
+In the guest the login user owns the share; when the host user's uid is not
+theirs, the unit maps it with
+.BR bindfs .
+.TP
+.B \-\-filesystem\-readonly
+Share
+.B \-\-filesystem
+read-only: the guest cannot change it.
 .TP
 .B \-\-vfio\-user\-root\-port
 Place vfio\-user devices behind a PCIe root port.
@@ -2690,6 +2725,7 @@ beats the file.
 <vm\-nvme\-block\-size>          \-\-nvme\-block\-size
 <vm\-nvme\-size>                \-\-nvme\-size
 <vm\-filesystem>               \-\-filesystem
+<vm\-filesystem\-writable>      not \-\-filesystem\-readonly
 <vm\-extra\-hostfwd>            \-\-extra\-hostfwd
 <vm\-vfio\-user\-root\-port>      \-\-vfio\-user\-root\-port
 <vm\-cpu\-sockets>              \-\-cpu\-sockets

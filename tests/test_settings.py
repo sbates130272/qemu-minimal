@@ -78,6 +78,8 @@ class VmOverrides(unittest.TestCase):
         self.assertEqual(got, {
             "vcpus": 8, "vmem": 8192, "nvme": "3",
             "username": "u", "password": "p", "filesystem": "/srv",
+            # Read-only unless the fleet says <vm-filesystem-writable>.
+            "filesystem_readonly": True,
             "vfio_user_root_port": False, "images": Path("/img"),
             "ssh_key_file": Path("/k.pub"), "cpu_sockets": 1,
             "cpu_phys_bits": 41, "pci_hole64_size": "512G",
