@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="100%" role="img" aria-label="Ernic P4 FP8 BW trend">
   <rect width="100%" height="100%" rx="18" fill="#ffffff" stroke="#d9e2f0"/>
-  <polyline fill="none" stroke="#ed6b21" stroke-width="4" points="28.0,146.2 46.9,68.5 65.8,187.7 84.7,147.6 103.6,147.6 122.5,183.2 141.5,28.0 160.4,28.0 179.3,47.0 198.2,141.9 217.1,185.3 236.0,38.2 254.9,58.5 273.8,192.0 292.7,183.8 311.6,184.8 330.5,184.8 349.5,147.2 368.4,147.2 387.3,40.3 406.2,40.3 425.1,40.3 444.0,76.9 462.9,159.1 481.8,191.6 500.7,144.1 519.6,144.1 538.5,181.4 557.5,181.4 576.4,159.9 595.3,159.9 614.2,41.7 633.1,41.7 652.0,41.7"/>
+  <polyline fill="none" stroke="#ed6b21" stroke-width="4" points="28.0,146.2 46.4,68.5 64.7,187.7 83.1,147.6 101.4,147.6 119.8,183.2 138.1,28.0 156.5,28.0 174.8,47.0 193.2,141.9 211.5,185.3 229.9,38.2 248.2,58.5 266.6,192.0 284.9,183.8 303.3,184.8 321.6,184.8 340.0,147.2 358.4,147.2 376.7,40.3 395.1,40.3 413.4,40.3 431.8,76.9 450.1,159.1 468.5,191.6 486.8,144.1 505.2,144.1 523.5,181.4 541.9,181.4 560.2,159.9 578.6,159.9 596.9,41.7 615.3,41.7 633.6,41.7 652.0,185.7"/>
   <text x="28" y="34" fill="#111827" font-family="system-ui,sans-serif" font-size="18" font-weight="700">Ernic P4 FP8 BW</text>
   <text x="28" y="56" fill="#4b5563" font-family="system-ui,sans-serif" font-size="12">oldest run at left, newest at right</text>
   <text x="28" y="190" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">481c8928</text>
   <text x="652" y="190" text-anchor="end" fill="#6b7280" font-family="system-ui,sans-serif" font-size="12">1781d9d6</text>
-  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 131.4 MB/s</text>
+  <text x="652" y="34" text-anchor="end" fill="#111827" font-family="system-ui,sans-serif" font-size="14" font-weight="700">latest: 61.0 MB/s</text>
 </svg>
