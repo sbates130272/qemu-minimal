@@ -1006,7 +1006,6 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
         if not p.exists():
             sys.exit(f"Error: Ansible {label} {p} does not exist!")
 
-    _ensure_jmespath()
     _ensure_ansible_collection(ansible_dir)
 
     print(f"Booting {backing} for Ansible setup...")
@@ -1056,7 +1055,6 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
     try:
         print(f"Running Ansible playbook {playbook}...")
         _restore_blocking_stdio()
-        _ensure_jmespath()
 
         private_key_extra = _key_extra_vars(cfg) + _cache_extra_vars(cfg)
         ap_cmd = ["ansible-playbook", "-i", str(inventory), str(playbook),
@@ -1076,6 +1074,10 @@ def _run_ansible(cfg: VMConfig, images: Path, backing: Path) -> None:
             if k.upper() not in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
         }
         ansible_env["ANSIBLE_CONFIG"] = str(ansible_dir / "ansible.cfg")
+        if _ssh_identity_args(cfg):
+            # Ansible's ssh offers an agent's keys first as well.
+            ansible_env.setdefault("ANSIBLE_SSH_EXTRA_ARGS",
+                                   "-o IdentitiesOnly=yes")
         r = subprocess.run(ap_cmd, cwd=str(ansible_dir), env=ansible_env)
         if r.returncode != 0:
             qemu_proc.kill()
@@ -1211,7 +1213,9 @@ def _ssh_identity_args(cfg: VMConfig) -> list[str]:
     # Strip .pub to get the private key; fall back to no -i if missing.
     private_key = key_pub.parent / key_pub.stem
     if private_key.exists():
-        return ["-i", str(private_key)]
+        # The key and no other: an agent's keys are offered first and can
+        # use up the guest's six attempts before this one is tried.
+        return ["-i", str(private_key), "-o", "IdentitiesOnly=yes"]
     return []
 
 
@@ -1341,36 +1345,6 @@ def _ensure_ansible_collection(ansible_dir: Path) -> None:
             stamp.write_text(digest + "\n")
         except OSError:
             pass
-
-
-def _ensure_jmespath() -> None:
-    py = _ansible_python()
-    r = subprocess.run([py, "-c", "import jmespath"], capture_output=True)
-    if r.returncode == 0:
-        return
-    for flag in ("--break-system-packages", "--user"):
-        r2 = subprocess.run([py, "-m", "pip", "install", flag, "jmespath"],
-                            capture_output=True)
-        r3 = subprocess.run([py, "-c", "import jmespath"], capture_output=True)
-        if r3.returncode == 0:
-            print(f"Installed jmespath via pip ({flag}).")
-            return
-    sys.exit(
-        f"Error: {py} cannot import jmespath.\n"
-        f"Install with: {py} -m pip install --break-system-packages jmespath"
-    )
-
-
-def _ansible_python() -> str:
-    import shutil
-    ap = shutil.which("ansible-playbook")
-    if ap:
-        first_line = Path(ap).read_text().splitlines()[0]
-        if first_line.startswith("#!"):
-            py = first_line[2:].strip()
-            if Path(py).is_file() and os.access(py, os.X_OK):
-                return py
-    return "python3"
 
 
 def _restore_blocking_stdio() -> None:

@@ -154,6 +154,31 @@ All notable changes to this project will be documented in this file.
   unit-tested and rendered through `generate_stack`), a translating IOMMU, and
   any lane.
 
+### Fixed
+
+- **`quick-start` waited for ever on healthy guests when an ssh-agent held
+  six keys.** ssh offers an agent's keys before the one named with `-i`
+  and the guest allows six attempts. Every ssh qemu-tool runs with a key
+  now passes `IdentitiesOnly=yes`: the wait for the guests, `qemu-tool ssh`,
+  the command `inspect` prints, `gen-vm`, and both playbook runs. The wait
+  also reports what ssh said when it gives up, and stops at once when a
+  guest's container has exited.
+- **A second `quick-start up` destroyed a running stack.** It read the
+  ports the stack's own guests publish as taken, moved them and let compose
+  recreate the guests against device servers that serve one guest each. A
+  stack's own ports are now its own, a rerun with the same flags changes
+  nothing, and a rerun whose settings differ from the running stack's is
+  refused with nothing started or stopped.
+
+- **`gen-vm` no longer requires `jmespath`.** Before it ran a playbook it
+  checked that Ansible's Python could import `jmespath`, tried `pip
+  install` when it could not, and stopped the bake when that failed. No
+  playbook or role here, and neither collection they use, has needed the
+  library since `sbates130272.batesste` 3.0.0 dropped `json_query`. The
+  check failed a bake on an Ansible installed with `uv tool`, whose
+  environment has no `pip`, and the command it then suggested could not
+  work there either. The check is removed.
+
 ## [v3.0.0] - 2026-11-23
 
 ### Breaking

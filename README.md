@@ -1465,9 +1465,8 @@ the backing image. This installs roles from the
 [sbates130272.batesste][batesste-galaxy] Galaxy collection
 (user setup, favourite packages, git configuration, and more).
 
-The host must have `ansible`, `ansible-galaxy`, and the Python
-`jmespath` module for the same interpreter as `ansible-playbook`
-(install with `pip install jmespath` inside the venv when needed). When the collection is not already installed, `gen-vm` runs
+The host must have `ansible` and `ansible-galaxy`. When the collection
+is not already installed, `gen-vm` runs
 `ansible-galaxy collection install --no-deps -r ansible/requirements.yml`.
 `requirements.yml` lists every collection the playbooks need, including the
 ones that would otherwise arrive as transitive dependencies, so `--no-deps`

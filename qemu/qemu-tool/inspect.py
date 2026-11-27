@@ -117,6 +117,15 @@ _SSH_LOOSE_HOST_KEY = [
 ]
 
 
+# With a key named, offer that key and nothing else. ssh offers every key
+# an agent holds BEFORE one given with -i, the guest's sshd allows six
+# attempts, and an agent with six keys therefore never reaches ours: "Too
+# many authentication failures" from a healthy guest, and after enough of
+# those sshd's per-source penalties stop it answering the address at all.
+# It does not turn agent forwarding off: `-A` still works.
+SSH_ONLY_THIS_KEY = ["-o", "IdentitiesOnly=yes"]
+
+
 def ssh_argv(
     record: dict[str, Any],
     strict_host_key: bool = False,
@@ -144,7 +153,7 @@ def ssh_argv(
         argv += _SSH_LOOSE_HOST_KEY
     argv += ["-p", str(port)]
     if record.get("ssh_key_file"):
-        argv += ["-i", record["ssh_key_file"]]
+        argv += ["-i", record["ssh_key_file"], *SSH_ONLY_THIS_KEY]
     argv.append(f"{record['username']}@{record.get('ssh_host') or 'localhost'}")
     argv += list(extra or [])
     return argv
@@ -2024,7 +2033,8 @@ def _record(vm: dict[str, Any], cfg: VMConfig) -> dict[str, Any]:
     # localhost, unless the stack published the port on one particular
     # address (<publish-bind-addr>), which is then the only one that answers.
     host = vm.get("ssh_host") or "localhost"
-    identity = f" -i {ssh['key_file']}" if ssh["key_file"] else ""
+    identity = (f" -o IdentitiesOnly=yes -i {ssh['key_file']}"
+                if ssh["key_file"] else "")
     ssh_cmd = (
         f"ssh{identity} -p {port} {username}@{host}"
         if port is not None

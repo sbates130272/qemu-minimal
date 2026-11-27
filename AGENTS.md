@@ -4944,6 +4944,63 @@ sha256 in `<collections>/ansible_collections/.qemu-tool-requirements.sha256`
 and skips galaxy when it matches; remove that file to install again. It
 does not notice a collection changed or removed by hand.
 
+## quick-start: ssh with a full agent, and a second `up`
+
+Two faults a first-time user reported on 2026-11-26, both silent, both
+fixed on `fix/quick-start-ssh-and-rerun` and both seen on a live guest on
+2026-11-27 (one scratch guest of `20261119.g2aea67d`, the dev host).
+
+**Every ssh that names a key passes `IdentitiesOnly=yes`.** ssh offers an
+agent's keys before a key given with `-i` that the agent does not hold, and
+the guest's sshd allows six attempts. With six keys in an agent the wait
+for the guests could never log in, printed dots for fifteen minutes at a
+healthy guest, and ran up sshd's per-source penalties.
+
+- The sites: `quick_start._SSH_PROBE_OPTIONS` (the wait, which also has
+  `IdentityAgent=none` and `BatchMode=yes`, and a closed stdin),
+  `inspect.SSH_ONLY_THIS_KEY` (`qemu-tool ssh` and the command `inspect`
+  prints, only when a key was found), `gen_vm._ssh_identity_args`, and the
+  two playbook runs, through `ANSIBLE_SSH_EXTRA_ARGS` in the child's
+  environment (`quick_start._playbook_env`, and `gen-vm`'s `ansible_env`).
+  In the environment so that `_playbook_command` and the generated
+  inventory do not change; a value the caller exported is kept.
+- It does not turn agent forwarding off: `qemu-tool ssh VM -- ...` with
+  `-A` still forwards.
+- The wait keeps ssh's last line and prints it when it gives up, and every
+  five seconds asks `_running_guests`: a guest whose `qemu-N` container has
+  exited fails at once with its last log lines.
+- Seen: with a throwaway agent of six keys, the old probe's command got
+  `Too many authentication failures` and the new one logged in; `ansible -m
+  ping` through the stack's inventory was `UNREACHABLE` without the
+  variable and `SUCCESS` with it.
+
+**A stack's own ports are its own, and a changed render is never handed to
+compose under running guests.** `_resolve_ports` and the re-check in `up()`
+asked only whether a port could be bound, so a second `up` saw the ports
+the stack's own qemu containers publish as taken, moved them and
+re-rendered. Compose then recreated the qemu services alone, and a guest
+cannot attach to device servers an earlier QEMU used.
+
+- `quick_start._own_ports(state)` reads the host ports of the project's
+  running containers; a port in it is not "in use", on the Linux side or in
+  the Windows listing.
+- `_refuse_recreate` sits between `generate_stack` and `up`: when the
+  rendered `docker-compose.yml` differs from the one that was there and
+  `_running_guests` is not empty, it stops with nothing started or stopped.
+  That covers every way a rerun can differ (another `--filesystem`,
+  `--vfu-doorbell`, `--no-metrics`, an edited fleet file), not only ports.
+  The layers in the stack directory are the new settings by then; the
+  message says to `down` first or to use the stack's flags.
+- `up()` no longer answers a failed `compose up` with a `down` when the
+  stack was running before the command started.
+- Seen on a one-guest scratch stack: `up` again with the same flags printed
+  "already running", left the qemu container's id and start time as they
+  were and exited 0; `up` without the share it was started with exited 1
+  with the container untouched.
+- Not covered: servers left up after their guests exited. `up` then starts
+  the guests against used servers, they exit, and the wait now says so
+  within seconds. `down` and `up` is the cure.
+
 ## Known issues / open bugs
 
 See `rocm-ernic-enablement.md` for the full tracking list. Short version:

@@ -502,7 +502,7 @@ class Rendering(KeyFixture):
         key = self.write_key(self.images / "keys" / "fleet_ed25519.pub", FLEET_LINE)
         text = self._print(self._record(ga(FLEET_LINE + "\n"),
                                         image=str(self.images / "qt-vm1.qcow2")))
-        self.assertIn(f"SSH:       ssh -i {key.with_name('fleet_ed25519')} "
+        self.assertIn(f"SSH:       ssh -o IdentitiesOnly=yes -i {key.with_name('fleet_ed25519')} "
                       "-p 2253 ubuntu@localhost", text)
         self.assertIn("accepted by guest", text)
 
