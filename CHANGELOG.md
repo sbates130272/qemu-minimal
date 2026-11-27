@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`quick-start --filesystem DIR`: a host directory in every guest, at
+  `/mnt/host`, with ownership that suits both sides.** `--filesystem-readonly`
+  shares it read-only, `run-vm` gains `--filesystem-readonly`, and a fleet
+  file gains `<vm-filesystem-writable>`: a fleet's `<vm-filesystem>` stays
+  read-only unless it says so. QEMU now shares with `security_model=none`
+  when it is not root, so every host access is made as the user the stack
+  runs as: what a guest writes is that user's file, with its real mode,
+  whoever wrote it in the guest. A root QEMU uses `mapped-xattr` and applies
+  no guest ownership to the host. The golden image gains a
+  `qemu-tool-hostfs` unit that mounts the share with `cache=mmap` and, when
+  the host user's uid is not the login user's, shows it through `bindfs`
+  with the ids mapped. Guests of an image published before this mount it by
+  hand; `quick-start` prints the command.
+- **`/opt/rocm/include`, `llvm`, `amdgcn`, `libexec` and `share` in the
+  golden image**, beside the `bin` and `lib` it already linked. They are
+  the seven names upstream's `amdrocm-core` package registers under
+  `/opt/rocm`, which the image's minimal install does not pull. In the next
+  published image.
+
 - **`quick-start --flavor storage`: a GPU client and a storage server, and
   a test of every storage path between them.** A fifth stack,
   `qemu/stacks/storage.xml`, of two guests that are not alike. The client
@@ -153,6 +172,33 @@ All notable changes to this project will be documented in this file.
   MMIO: it does. Not run: `up --vfu-doorbell` end to end (the layer is
   unit-tested and rendered through `generate_stack`), a translating IOMMU, and
   any lane.
+
+### Fixed
+
+- **`quick-start` waited for ever on healthy guests when an ssh-agent held
+  six keys.** ssh offers an agent's keys before the one named with `-i`
+  and the guest allows six attempts. Every ssh qemu-tool runs with a key
+  now passes `IdentitiesOnly=yes`: the wait for the guests, `qemu-tool ssh`,
+  the command `inspect` prints, `gen-vm`, and both playbook runs. The wait
+  also reports what ssh said when it gives up, and stops at once when a
+  guest's container has exited.
+- **A second `quick-start up` destroyed a running stack.** It read the
+  ports the stack's own guests publish as taken, moved them and let compose
+  recreate the guests against device servers that serve one guest each. A
+  stack's own ports are now its own, a rerun with the same flags changes
+  nothing, and a rerun whose settings differ from the running stack's is
+  refused with nothing started or stopped.
+- **`run-vm --filesystem` attached a 2 GiB memory object nothing used**,
+  and shared with `security_model=passthrough`, which wants a root QEMU.
+
+- **`gen-vm` no longer requires `jmespath`.** Before it ran a playbook it
+  checked that Ansible's Python could import `jmespath`, tried `pip
+  install` when it could not, and stopped the bake when that failed. No
+  playbook or role here, and neither collection they use, has needed the
+  library since `sbates130272.batesste` 3.0.0 dropped `json_query`. The
+  check failed a bake on an Ansible installed with `uv tool`, whose
+  environment has no `pip`, and the command it then suggested could not
+  work there either. The check is removed.
 
 ## [v3.0.0] - 2026-11-23
 

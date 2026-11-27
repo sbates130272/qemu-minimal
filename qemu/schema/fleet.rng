@@ -244,8 +244,14 @@
           </optional>
           <optional>
             <element name="vm-filesystem">
-              <a:documentation>Host directory shared into each guest over 9p with mount tag hostfs. one host path for all guests, or a comma list of exactly vm-count paths; run-vm --xml outside a stack ignores a list; default empty, no share.</a:documentation>
+              <a:documentation>Host directory shared into each guest over 9p, mounted at /mnt/host; read-only unless vm-filesystem-writable. one host path for all guests, or a comma list of exactly vm-count paths; run-vm --xml outside a stack ignores a list; default empty, no share.</a:documentation>
               <ref name="kind.str"/>
+            </element>
+          </optional>
+          <optional>
+            <element name="vm-filesystem-writable">
+              <a:documentation>Let guests write the vm-filesystem share; what they write is the file of the user the stack runs as. true or false; default false, the share is read-only; refused with no vm-filesystem.</a:documentation>
+              <ref name="kind.bool"/>
             </element>
           </optional>
           <optional>

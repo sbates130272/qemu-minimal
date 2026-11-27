@@ -258,7 +258,8 @@ same device and cannot bind while `sdxi_char` has it.
 ## ROCm
 
 `ROCM_PATH` is `{{ golden_rocm_path }}` and its `bin` is on PATH for login
-and non-login shells alike, so `ssh guest hipcc ...` works. `/opt/rocm/bin`
-and `/opt/rocm/lib` are symlinks into it. `amd-smi` is installed and
+and non-login shells alike, so `ssh guest hipcc ...` works. `/opt/rocm/bin`,
+`lib`, `include`, `llvm`, `amdgcn`, `libexec` and `share` are symlinks into
+it, the names upstream's packages give a full install. `amd-smi` is installed and
 `import amdsmi` works; `rocm-smi` is deprecated upstream and not packaged in
 this stream.

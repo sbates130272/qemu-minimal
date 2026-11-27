@@ -711,7 +711,7 @@ the XSD has a bullet of its own.
   with one repeated (267 documents, all three answers), every decimal
   digit Python knows in a single integer, an integer one digit past
   `int()`'s limit, and 400 generated addresses. **Every flat setting is
-  held to its kind, whether or not a document sets it**: 19 of the 78 are
+  held to its kind, whether or not a document sets it**: 20 of the 79 are
   in no listed document and no shipped file, and typing one of those as
   another kind, in either renderer, used to pass the suite. One test reads
   each setting's declaration in both rendered schemas (`kind.<kind>` and
@@ -4839,6 +4839,23 @@ bake that stopped:
   assertions were run against a guest of the image below and pass; the
   whole check was run there with the old ptrace line removed and exits 0.
 
+**The versionless `/opt/rocm` has seven links from the next bake, where it
+had two.** A user building against `/opt/rocm/include` on 2026-11-26 found
+only `bin` and `lib`. Upstream's install page says to set `ROCM_PATH`,
+`PATH` and `LD_LIBRARY_PATH`, which the image does (`/etc/environment`),
+and says nothing of the layout. The names come from the postinst of
+upstream's `amdrocm-core<line>-gfx*` metapackage, read on the dev host
+(`/var/lib/dpkg/info/amdrocm-core10.2-gfx1250.postinst`): it registers
+`bin`, `lib`, `include`, `llvm`, `amdgcn`, `libexec` and `share` under
+`/opt/rocm` with `update-alternatives`, plus `core` and `core-10`. The
+bake's minimal install does not pull that package (it would bring every
+math library), so `rocjitsu_setup`'s `rocm_env` tasks link the same seven
+by hand, each where the tree has the directory and nothing holds the name;
+the guest check requires each to resolve into `ROCM_PATH`. Not baked.
+`perftest_setup` and `fio_hipfile_setup` still take the versioned path;
+their comments that `/opt/rocm` has no `include` describe images up to
+`20261119.g2aea67d`.
+
 **One image, baked by hand on the dev host on 2026-11-19, and it is not one
 clean bake**: a full `gen-vm --bake` that stopped at the ptrace patch, then
 four `--ansible-only` reruns from the rocjitsu play
@@ -4943,6 +4960,161 @@ for the rocm-ernic entry. `_ensure_ansible_collection` records the file's
 sha256 in `<collections>/ansible_collections/.qemu-tool-requirements.sha256`
 and skips galaxy when it matches; remove that file to install again. It
 does not notice a collection changed or removed by hand.
+
+## quick-start: ssh with a full agent, and a second `up`
+
+Two faults a first-time user reported on 2026-11-26, both silent, both
+fixed on `fix/quick-start-ssh-and-rerun` and both seen on a live guest on
+2026-11-27 (one scratch guest of `20261119.g2aea67d`, the dev host).
+
+**Every ssh that names a key passes `IdentitiesOnly=yes`.** ssh offers an
+agent's keys before a key given with `-i` that the agent does not hold, and
+the guest's sshd allows six attempts. With six keys in an agent the wait
+for the guests could never log in, printed dots for fifteen minutes at a
+healthy guest, and ran up sshd's per-source penalties.
+
+- The sites: `quick_start._SSH_PROBE_OPTIONS` (the wait, which also has
+  `IdentityAgent=none` and `BatchMode=yes`, and a closed stdin),
+  `inspect.SSH_ONLY_THIS_KEY` (`qemu-tool ssh` and the command `inspect`
+  prints, only when a key was found), `gen_vm._ssh_identity_args`, and the
+  two playbook runs, through `ANSIBLE_SSH_EXTRA_ARGS` in the child's
+  environment (`quick_start._playbook_env`, and `gen-vm`'s `ansible_env`).
+  In the environment so that `_playbook_command` and the generated
+  inventory do not change; a value the caller exported is kept.
+- It does not turn agent forwarding off: `qemu-tool ssh VM -- ...` with
+  `-A` still forwards.
+- The wait keeps ssh's last line and prints it when it gives up, and every
+  five seconds asks `_running_guests`: a guest whose `qemu-N` container has
+  exited fails at once with its last log lines.
+- Seen: with a throwaway agent of six keys, the old probe's command got
+  `Too many authentication failures` and the new one logged in; `ansible -m
+  ping` through the stack's inventory was `UNREACHABLE` without the
+  variable and `SUCCESS` with it.
+
+**A stack's own ports are its own, and a changed render is never handed to
+compose under running guests.** `_resolve_ports` and the re-check in `up()`
+asked only whether a port could be bound, so a second `up` saw the ports
+the stack's own qemu containers publish as taken, moved them and
+re-rendered. Compose then recreated the qemu services alone, and a guest
+cannot attach to device servers an earlier QEMU used.
+
+- `quick_start._own_ports(state)` reads the host ports of the project's
+  running containers; a port in it is not "in use", on the Linux side or in
+  the Windows listing.
+- `_refuse_recreate` sits between `generate_stack` and `up`: when the
+  rendered `docker-compose.yml` differs from the one that was there and
+  `_running_guests` is not empty, it stops with nothing started or stopped.
+  That covers every way a rerun can differ (another `--filesystem`,
+  `--vfu-doorbell`, `--no-metrics`, an edited fleet file), not only ports.
+  The layers in the stack directory are the new settings by then; the
+  message says to `down` first or to use the stack's flags.
+- `up()` no longer answers a failed `compose up` with a `down` when the
+  stack was running before the command started.
+- Seen on a one-guest scratch stack: `up` again with the same flags printed
+  "already running", left the qemu container's id and start time as they
+  were and exited 0; `up` without the share it was started with exited 1
+  with the container untouched.
+- Not covered: servers left up after their guests exited. `up` then starts
+  the guests against used servers, they exit, and the wait now says so
+  within seconds. `down` and `up` is the cure.
+
+## A host directory shared with a guest
+
+`run-vm --filesystem DIR [--filesystem-readonly]`, a fleet's
+`<vm-filesystem>` with `<vm-filesystem-writable>`, and `quick-start
+--filesystem DIR [--filesystem-readonly]`. The channel is virtio-9p with the
+mount tag `hostfs` (`run_vm.HOSTFS_TAG`); the golden image's
+`qemu-tool-hostfs` unit mounts it at `/mnt/host`. Asked for by the same
+user; the owner's requirement was that the guest user has good permissions
+and ownership and the host is not messed up, with QEMU usually in a
+container.
+
+**The host side: QEMU does every access as itself.**
+
+- `run_vm.virtfs_security_model(euid)`: `none` when QEMU is not root, which
+  is every stack (the qemu container runs as `CONTAINER_USER`) and every
+  ordinary `run-vm`. A file a guest makes is the caller's on the host, with
+  its real mode and real symlinks, whoever made it in the guest; a guest
+  `chown` gets EPERM. Root: `mapped-xattr`, so root in the guest cannot
+  leave root-owned or setuid files on the host. It was `passthrough`,
+  which wants a root QEMU.
+- `multidevs=remap`, and `readonly=on` for a read-only share. The
+  `memory-backend-memfd,id=mem0,size=2G` object that rode along with every
+  share is gone: nothing used it.
+- `run-vm` refuses a share that is not a directory (in a stack, inside the
+  qemu container) and a path with a comma.
+- **A fleet's share is read-only unless `<vm-filesystem-writable>true`.**
+  That default predates this and is deliberate: N guests mount one
+  directory. Read-only renders `:ro` on the bind mount and
+  `--filesystem-readonly` on each `qemu-N`; writable renders neither.
+  `settings.vm_overrides` follows it, so `run-vm --xml` outside a stack is
+  read-only too, where it used to be writable. `run-vm --filesystem` typed
+  by hand is writable unless `--filesystem-readonly`.
+- `gen_compose._check_filesystem` refuses a share that is not an absolute
+  path or has a colon (compose would take a relative one for a named
+  volume), and `<vm-filesystem-writable>` with no share.
+- No committed stack sets either element, so none was regenerated.
+
+**`quick-start --filesystem DIR` shares writable**, which is what the flag
+is for. It writes `overlay-share.xml` (in `_LAYER_ORDER` after the images
+layer) on `up` and `all`, and an `up` without the flag takes an earlier
+run's layer away, as the doorbell layer is. It notes on stderr, and does
+not refuse, a share that holds the caller's home. `_share_note` prints the
+directory and the by-hand mount command after `up` and in the summary.
+
+**The guest side is `rocm_ernic_setup`'s `hostfs` tasks**
+(`files/qemu-tool-hostfs.sh`, `/etc/default/qemu-tool-hostfs`,
+`qemu-tool-hostfs.service`), included from `network.yml` behind
+`rocm_ernic_setup_hostfs`, not behind the NIC switch.
+
+- With no 9p channel (virtio device type `0x0009`) the script says so and
+  exits 0, which is every guest without a share.
+- **`cache=mmap` is required.** Measured: 5.3 MB/s write and 6.6 MB/s read
+  of 100 MiB with no cache option; 161 and 288 MB/s with `mmap`; 185 and
+  199 with `loose`, which can show a stale file and is not used.
+- **The uid.** The guest sees the caller's uid as the owner of everything.
+  When that is the login user's uid the share is mounted as it is. When it
+  is not, the login user is "other" to every file. 9p has no id-mapped
+  mounts (`v9fs_fs_type` has no `FS_ALLOW_IDMAP`, read at mainline), so
+  the share is mounted at `/run/qemu-tool/hostfs/raw`, under a directory
+  only root can enter, and shown at `/mnt/host` through `bindfs
+  --map=<host uid>/<user uid>:@<host gid>/@<user gid>`. A share owned by
+  root is not mapped. `bindfs` is in the package manifest and the tasks
+  install it; without it the share is mounted and the script says what is
+  missing.
+- `qemu/checks/rocm-golden.sh` asserts, between its `host share` markers
+  and with no share needed: the script, the unit enabled and not failed,
+  `bindfs`, the two modules, and that a guest that has a channel has it
+  mounted.
+- **Nothing installs the unit after boot**, so guests of
+  `20261119.g2aea67d` mount by hand until an image baked from this is
+  published and `<backing-ref>` moves. `tests/test_host_share.py` fails a
+  playbook run after boot that names it.
+
+**Why not virtiofs.** It would do the id mapping on the host
+(`virtiofsd --translate-uid`), and faster. The QEMU image has the
+`vhost-user-fs` device and no `virtiofsd`, and its Ubuntu 24.04 archive's
+1.10 predates the translate options (from memory, not checked). That is a
+batesste-ci-images change.
+
+**Seen**, 2026-11-27, the dev host, guests of `20261119.g2aea67d` with the
+script copied in and `bindfs` installed by hand:
+
+| Run | Result |
+|---|---|
+| host QEMU as uid 1000, `none`, guest user 1000 | reads and writes; host files uid 1000, modes and symlinks as made |
+| the same, guest root | writes land as uid 1000 on the host; `chown` refused |
+| the same, a guest user of uid 4242, no mapping | reads world-readable files; cannot write, cannot enter a 0700 directory |
+| the script with that user as the login user | `bindfs` view; the user reads, writes, makes symlinks and directories; host files uid 1000; `/run/qemu-tool/hostfs/raw` denied to them |
+| `run-vm --filesystem --filesystem-readonly` | mounts; the user and root both get "Read-only file system" |
+| `quick-start --filesystem` on a one-guest stack, QEMU in the container as 1000:1000 | writable bind mount; guest user and guest root files both uid 1000 on the host; 100 MiB with fsync at 104 MB/s |
+
+**Not run**: a bake, so the tasks, the unit at boot and the guest check's
+block have run against nothing but the tests; a host uid that really
+differs (the dev host's is 1000, so the mapping was shown with a second
+guest user); a root QEMU and `mapped-xattr`; a per-guest list of shares;
+two guests writing one share; a build in the share; SELinux or rootless
+Docker; `ansible-lint` on the new tasks.
 
 ## Known issues / open bugs
 
@@ -8359,11 +8531,11 @@ interfaces.
   private names off (`filters: ["!^_"]`); members in source order;
   signatures separate, with annotations; source on.
   `show_if_no_docstring: true`, so a public function with no docstring is
-  listed with its signature and source: 48 of the 147 public top-level
+  listed with its signature and source: 48 of the 148 public top-level
   functions and classes have none, and `caps`, `cli`, `list_vms`, `qcow`
   and `shutdown` would otherwise show no member at all. Module constants and
   dataclass fields are listed for the same reason, which is what makes
-  `FleetConfig` 79 entries long. `tests/test_api_docs.py` holds those
+  `FleetConfig` 80 entries long. `tests/test_api_docs.py` holds those
   three numbers, and the count of pages, to the tree.
 - **Nothing is silenced.** The build is `--strict` and logs no warning;
   no griffe or mkdocs message is filtered.

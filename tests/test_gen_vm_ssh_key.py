@@ -127,7 +127,8 @@ class Generated(Fixture):
         self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o600)
         self.assertTrue(public.read_text().startswith("ssh-rsa "))
         self.assertEqual(cfg.ssh_key_file, public)
-        self.assertEqual(gen_vm._ssh_identity_args(cfg), ["-i", str(private)])
+        self.assertEqual(gen_vm._ssh_identity_args(cfg),
+                         ["-i", str(private), "-o", "IdentitiesOnly=yes"])
         self.assertEqual(len(said.splitlines()), 1)
         self.assertIn(str(private), said)
         self.assertIn("qemu-tool ssh vm1", said)
@@ -416,7 +417,8 @@ class Inherited(Fixture):
         self.assertTrue(
             gen_vm._inherit_key(cfg, self.images / "vm1.json"))
         self.assertEqual(cfg.ssh_key_file, public)
-        self.assertEqual(gen_vm._ssh_identity_args(cfg), ["-i", str(private)])
+        self.assertEqual(gen_vm._ssh_identity_args(cfg),
+                         ["-i", str(private), "-o", "IdentitiesOnly=yes"])
 
     def test_ansible_only_with_no_record_and_half_a_pair_takes_nothing(self):
         private = gen_vm.generated_key_path(self.images, "vm1")

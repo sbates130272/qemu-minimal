@@ -222,6 +222,10 @@ class _State:
     # play of vm-xio.yml that installs and checks the guest half. Implies
     # xio_test, since the tools build from the checkout that play makes.
     vfu_doorbell: bool = False
+    # --filesystem: a host directory every guest gets at /mnt/host, and
+    # whether guests may write it.
+    share: Path | None = None
+    share_readonly: bool = False
 
     # ---- convenience readers -------------------------------------------
     @property
@@ -453,7 +457,8 @@ def _resolve_key_dir(requested: Path, explicit: bool) -> Path:
 # the original values half way through and waited for SSH on a port no guest
 # was published on.
 _LAYER_ORDER = ("overlay-vfu-doorbell.xml", "overlay-sized.xml",
-                "overlay-images.xml", "overlay-ports.xml",
+                "overlay-images.xml", "overlay-share.xml",
+                "overlay-ports.xml",
                 "overlay-metrics.xml", "overlay-image-login.xml")
 
 # The shipped overlay --vfu-doorbell layers onto the xio stack, and the layer
@@ -517,6 +522,94 @@ def _set_doorbell_layer(state: _State, on: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(shipped.read_text())
     _rescan_layers(state)
+
+
+_SHARE_LAYER = "overlay-share.xml"
+# What a guest whose image has no qemu-tool-hostfs unit types to get the
+# share; the unit's own options, from files/qemu-tool-hostfs.sh.
+_SHARE_MOUNT = ("sudo mount -t 9p -o trans=virtio,version=9p2000.L,"
+                "msize=1048576,cache=mmap,nosuid,nodev hostfs /mnt/host")
+
+
+def _set_share_layer(state: _State) -> None:
+    """Layer --filesystem onto the stack, or take an earlier run's off.
+
+    Taken off when the flag is not given, as the doorbell layer is: a stack
+    once brought up with a share of somebody's home does not keep it because
+    a later `up` forgot to say so. A fleet file's own <vm-filesystem> is not
+    touched by that; the flag, given, outranks it.
+    """
+    path = state.stack_dir / _SHARE_LAYER
+    if state.share is None:
+        if state.share_readonly:
+            _die("--filesystem-readonly needs --filesystem DIR")
+        if path.is_file():
+            path.unlink()
+            _rescan_layers(state)
+        return
+    share = state.share.expanduser().resolve()
+    if not share.is_dir():
+        _die(f"--filesystem {state.share}: {share} is not a directory")
+    if "," in str(share) or ":" in str(share):
+        _die(f"--filesystem {share}: a path with a comma or a colon cannot "
+             "be shared")
+    home = Path.home().resolve()
+    if share == home or share in home.parents:
+        # Not refused: it is what was asked for. Said, because the guest's
+        # login is not a secret.
+        print(f"note: {share} holds your home directory. Every guest can "
+              f"read {'' if state.share_readonly else 'and change '}"
+              "everything in it you can, ~/.ssh included, and anyone who "
+              "can log in to a guest is root there. Share a project "
+              "directory if that is all the guest needs.", file=sys.stderr)
+    _write_layer(state, _SHARE_LAYER,
+                 {"vm-filesystem": str(share),
+                  "vm-filesystem-writable":
+                      "false" if state.share_readonly else "true"},
+                 "The host directory this run shares with every guest.")
+
+
+def _share_note(state: _State) -> list[str]:
+    """How a guest reaches the fleet's share; empty when there is none."""
+    if not state.fleet.vm_filesystem:
+        return []
+    mode = ("writable: what a guest writes there is your file"
+            if state.fleet.vm_filesystem_writable else "read-only")
+    return [
+        f"Shared with the guests ({mode}):",
+        "",
+        f"    {state.fleet.vm_filesystem}",
+        "",
+        "A guest image with the qemu-tool-hostfs unit has it at /mnt/host.",
+        "In an older image, in the guest:",
+        "",
+        f"    {_SHARE_MOUNT}",
+    ]
+
+
+def _refuse_recreate(state: _State, before: str | None) -> None:
+    """Never hand compose a changed file while the stack's guests run.
+
+    Compose recreates the services whose definition changed and no others.
+    A guest attaches to its device servers once, so a qemu-N recreated
+    beside servers an earlier QEMU used times out and exits: a second `up`
+    with another flag replaced a working stack with a dead one. The files
+    in the stack directory are the new settings by now; nothing was started
+    or stopped.
+    """
+    compose = state.stack_dir / "docker-compose.yml"
+    if before is None or not compose.is_file() or compose.read_text() == before:
+        return
+    running = _running_guests(state)
+    if not running:
+        return
+    _die(f"the {state.stack_name} stack is running ({', '.join(running)}) "
+         "and these settings are not the ones it was started with.\n"
+         "       Starting it now would recreate the guests against device "
+         "servers that serve one guest each, so nothing was started or "
+         "stopped.\n"
+         "       `qemu-tool quick-start down` and then this command again, "
+         "or run this command with the flags the stack was started with.")
 
 
 # ---------------------------------------------------------------------------
@@ -847,11 +940,16 @@ def _resolve_ports(state: _State) -> None:
     # rewriting the file without it.
     snapshot: dict[str, str] = {}
     changed = False
+    own = _own_ports(state)
+    if own:
+        print(f"note: the {state.stack_name} stack is already running; the "
+              f"ports it holds ({', '.join(str(p) for p in sorted(own))}) "
+              "stay where they are")
     wanted = []
     if state.metrics:
         wanted += [("grafana-port", state.fleet.grafana_port, "Grafana")]
     for element, port, label in wanted:
-        if _port_free(port):
+        if port in own or _port_free(port):
             snapshot[element] = str(port)
             continue
         free = _next_free_port(port + 1)
@@ -863,7 +961,8 @@ def _resolve_ports(state: _State) -> None:
 
     base = state.fleet.ssh_port_base
     snapshot["ssh-port-base"] = str(base)
-    taken = [base + i for i in range(state.vm_count) if not _port_free(base + i)]
+    taken = [base + i for i in range(state.vm_count)
+             if base + i not in own and not _port_free(base + i)]
     if taken and not state.in_network:
         free = _next_free_port(base + state.vm_count)
         answer = _ask(state, f"Guest SSH wants ports {base}..{base + state.vm_count - 1}, "
@@ -1019,6 +1118,33 @@ def _running_guests(state: _State) -> list[str] | None:
         return None
     return sorted(name for name in result.stdout.split()
                   if name.startswith("qemu-"))
+
+
+_PUBLISHED_PORT = re.compile(r":(\d+)->")
+
+
+def _own_ports(state: _State) -> frozenset[int]:
+    """Host ports this stack's own running containers publish.
+
+    A port the stack already holds is not "in use" to the stack. Read as
+    taken, a second `up` moved the guests' SSH ports off themselves and
+    re-rendered; compose then recreated the qemu containers alone, and a
+    guest cannot attach to device servers an earlier QEMU already used, so
+    the run replaced a working stack with guests that exit a minute later.
+    Empty when Docker cannot be asked, which is what a first run sees.
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "ps",
+             "--filter", f"label=com.docker.compose.project={state.stack_name}",
+             "--filter", "status=running",
+             "--format", "{{.Ports}}"],
+            capture_output=True, text=True)
+    except OSError:
+        return frozenset()
+    if result.returncode != 0:
+        return frozenset()
+    return frozenset(int(port) for port in _PUBLISHED_PORT.findall(result.stdout))
 
 
 def _refuse_under_running_guests(state: _State, why: str) -> None:
@@ -1254,9 +1380,12 @@ def up(state: _State) -> None:
         # below sees current data.
         global _WINDOWS_PORTS
         _WINDOWS_PORTS = _windows_listening_ports()
+        # What the stack's own containers publish is theirs, and on WSL2 the
+        # Windows side lists those ports as listening too.
+        own = _own_ports(state)
         if state.metrics:
             for port, label in [(state.fleet.grafana_port, "Grafana")]:
-                if port in _WINDOWS_PORTS:
+                if port in _WINDOWS_PORTS and port not in own:
                     _die(
                         f"{label} port {port} is held by a Windows process.\n"
                         f"  Find it: run  netstat -ano | findstr :{port}  in PowerShell,\n"
@@ -1265,7 +1394,8 @@ def up(state: _State) -> None:
 
         if not state.in_network:
             base = state.fleet.ssh_port_base
-            taken = [base + i for i in range(state.vm_count) if not _port_free(base + i)]
+            taken = [base + i for i in range(state.vm_count)
+                     if base + i not in own and not _port_free(base + i)]
             # On WSL2, _port_free uses socket.bind which succeeds for ports that
             # the Windows proxy holds — so after a failed compose up, force a remap
             # to a fresh base even when taken looks empty.
@@ -1291,6 +1421,14 @@ def up(state: _State) -> None:
                           check=False, env={"QEMU_TOOL_SRC": str(state.stack_dir)})
         if result.returncode == 0:
             break
+
+        if own:
+            # The retry below starts with a `down`. Never of a stack that
+            # was running before this command touched it.
+            _die("`docker compose up --detach` failed on a stack that was "
+                 "already running; it was left as it is.\n"
+                 "       To start it again from nothing: `qemu-tool "
+                 "quick-start down` and then `up`, with the same flags.")
 
         if attempt == 0:
             # On WSL2 the Windows proxy can grab a port mid-up — after our
@@ -1334,6 +1472,30 @@ def _health(container: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else "missing"
 
 
+# The key the image published and nothing else, and never a prompt. ssh
+# offers every key an agent holds before one named with -i and the guest's
+# sshd allows six attempts, so an agent with six keys never reached ours:
+# the wait printed dots at a healthy guest until it gave up, and the failed
+# logins ran up sshd's per-source penalties until it stopped answering.
+_SSH_PROBE_OPTIONS = ("-o", "StrictHostKeyChecking=no",
+                      "-o", "UserKnownHostsFile=/dev/null",
+                      "-o", "ConnectTimeout=5",
+                      "-o", "BatchMode=yes",
+                      "-o", "IdentitiesOnly=yes",
+                      "-o", "IdentityAgent=none")
+
+
+def _last_line(text: str | None) -> str:
+    """What ssh said last, without its host-key notice."""
+    lines = [line.strip() for line in (text or "").splitlines()
+             if line.strip() and "Permanently added" not in line]
+    return lines[-1] if lines else ""
+
+
+def _ssh_said(said: str) -> str:
+    return f".\n       ssh's last word: {said}" if said else ""
+
+
 def wait_for_guests(state: _State) -> None:
     """Separate from up(), because a caller using --in-network can only reach
     the guests once it has joined the network that up() just created."""
@@ -1346,22 +1508,36 @@ def wait_for_guests(state: _State) -> None:
         print(f"  guest {index} ({host}:{port}) ", end="", flush=True)
         while True:
             probe = subprocess.run(
-                ["ssh", "-o", "StrictHostKeyChecking=no",
-                 "-o", "UserKnownHostsFile=/dev/null",
-                 "-o", "ConnectTimeout=5", "-i", str(state.key),
+                ["ssh", *_SSH_PROBE_OPTIONS, "-i", str(state.key),
                  "-p", str(port), f"{state.username}@{host}", "true"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE, text=True)
             if probe.returncode == 0:
                 elapsed = int(time.monotonic() - start)
                 print(f" up ({elapsed}s)", flush=True)
                 break
+            said = _last_line(probe.stderr)
             if time.monotonic() > deadline:
                 print(flush=True)
                 _compose(state, "logs", f"qemu-{index}", check=False)
                 _die(f"guest {index} did not answer SSH at {host}:{port} "
-                     f"as {state.username}")
+                     f"as {state.username}" + _ssh_said(said))
             now = time.monotonic()
             if now - last_dot >= 5:
+                # A guest whose QEMU has exited will never answer, and
+                # waiting out the deadline for it reads as a slow boot.
+                running = _running_guests(state)
+                if running is not None and f"qemu-{index}" not in running:
+                    print(flush=True)
+                    _compose(state, "logs", "--tail", "40", f"qemu-{index}",
+                             check=False)
+                    _die(f"guest {index} is not running: its qemu-{index} "
+                         "container has exited, and its last lines are "
+                         "above.\n"
+                         "       A guest attaches to its device servers "
+                         "once, so start the whole stack again: "
+                         "`qemu-tool quick-start down` and then `up`, with "
+                         "the same flags.")
                 print(".", end="", flush=True)
                 last_dot = now
             time.sleep(1)
@@ -1674,6 +1850,19 @@ def _check_optional_tests(state: _State) -> None:
               "run this mode.", file=sys.stderr)
 
 
+def _playbook_env() -> dict[str, str]:
+    """The environment of the playbook run: the caller's, and one ssh option.
+
+    --private-key names the key; this keeps Ansible's ssh from offering an
+    agent's keys ahead of it, for the reason _SSH_PROBE_OPTIONS gives. In the
+    environment, and not in the command or the generated inventory, so
+    neither changes; a value the caller exported is kept.
+    """
+    env = os.environ.copy()
+    env.setdefault("ANSIBLE_SSH_EXTRA_ARGS", "-o IdentitiesOnly=yes")
+    return env
+
+
 def _playbook_command(state: _State) -> list[str]:
     """The ansible-playbook command line for the configure-and-test step.
 
@@ -1735,7 +1924,8 @@ def configure_and_test(state: _State) -> None:
     before = _ernic_bytes(state, 1) if counted else 0
 
     result = subprocess.run(_playbook_command(state),
-                            cwd=state.repo_root / "ansible")
+                            cwd=state.repo_root / "ansible",
+                            env=_playbook_env())
     if result.returncode != 0:
         _die(_rocm_rdma_failure(state)
              or "the configure-and-test playbook failed")
@@ -2112,7 +2302,7 @@ def _summary(state: _State) -> None:
     print("  Or with plain ssh, which is the same thing spelled out:")
     print()
     for index in range(1, state.vm_count + 1):
-        print(f"      ssh -i {state.key} \\")
+        print(f"      ssh -o IdentitiesOnly=yes -i {state.key} \\")
         print(f"          -p {state.guest_port(index)} {state.username}@{shown}")
     print()
     if state.metrics:
@@ -2133,6 +2323,11 @@ def _summary(state: _State) -> None:
     for line in _exposure_note(state):
         print(f"  {line}")
     print()
+    share = _share_note(state)
+    for line in share:
+        print(f"  {line}")
+    if share:
+        print()
     print("  What else is here:")
     print()
     print("      qemu-tool list --summary          # what the fleet is doing")
@@ -2203,6 +2398,8 @@ def run(
     hipfile_test: bool = False,
     xio_test: bool = False,
     vfu_doorbell: bool = False,
+    share: Path | None = None,
+    share_readonly: bool = False,
 ) -> None:
     fleet_stem, stack_stem, key_stem, playbook = VARIANTS[variant]
 
@@ -2249,6 +2446,8 @@ def run(
         # The doorbell tools build from the checkout the rocm-xio play makes.
         xio_test=xio_test or vfu_doorbell,
         vfu_doorbell=vfu_doorbell,
+        share=share,
+        share_readonly=share_readonly,
         playbook=playbook,
         variant=variant,
     )
@@ -2262,6 +2461,10 @@ def run(
     if verb in ("all", "up"):
         _check_vfu_doorbell(state)
         _set_doorbell_layer(state, vfu_doorbell)
+        _set_share_layer(state)
+    elif share is not None or share_readonly:
+        print(f"note: --filesystem ignored: `{verb}` takes the stack as it "
+              "is. The up and all verbs read it.", file=sys.stderr)
 
     if images is not None:
         _write_layer(state, "overlay-images.xml",
@@ -2350,9 +2553,14 @@ def run(
         if clean_qcow2:
             clean_overlays(state)
         make_overlays(state)
+        compose_file = state.stack_dir / "docker-compose.yml"
+        before = compose_file.read_text() if compose_file.is_file() else None
         generate_stack(state)
+        _refuse_recreate(state, before)
         up(state)
         if verb == "up":
+            for line in _share_note(state):
+                print(f"  {line}")
             return
 
     if verb in ("all", "test"):

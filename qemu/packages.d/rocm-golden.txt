@@ -131,3 +131,7 @@ rsync
 
 pipx
 python3-venv
+
+# Maps the host owner of a `run-vm --filesystem` share to the login user;
+# rocm_ernic_setup's hostfs tasks name it too.
+bindfs

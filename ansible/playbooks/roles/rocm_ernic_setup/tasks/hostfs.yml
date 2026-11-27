@@ -1,0 +1,73 @@
+---
+# The directory a host shares with the guest (`qemu-tool run-vm --filesystem`,
+# a fleet's <vm-filesystem>) is mounted at /mnt/host at boot. With no share
+# the unit does nothing. files/qemu-tool-hostfs.sh says whose files they are
+# and why the mount options are what they are.
+#
+# bindfs is what gives the login user the share when the host user's uid is
+# not theirs: the 9p client cannot remap ids. From the archive's universe.
+
+- name: Install bindfs, which maps the host owner of a share to the login user
+  ansible.builtin.apt:
+    name: bindfs
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Say which user a host share is given to
+  ansible.builtin.copy:
+    dest: /etc/default/qemu-tool-hostfs
+    content: |
+      # Read by /usr/local/sbin/qemu-tool-hostfs.sh.
+      HOSTFS_USER={{ rocm_ernic_setup_hostfs_user }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the script that mounts a host share
+  ansible.builtin.copy:
+    src: qemu-tool-hostfs.sh
+    dest: /usr/local/sbin/qemu-tool-hostfs.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the host share unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/qemu-tool-hostfs.service
+    content: |
+      [Unit]
+      Description=Mount the directory the host shares with this guest
+      After=local-fs.target systemd-modules-load.service
+      Before=ssh.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/qemu-tool-hostfs.sh
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable the host share unit
+  ansible.builtin.systemd_service:
+    name: qemu-tool-hostfs
+    enabled: true
+    daemon_reload: true
+
+# Now as well as at the next boot: a bake has no share, and the script has to
+# say so and exit 0 or every guest of the image boots with a failed unit.
+- name: Run the host share script once
+  ansible.builtin.command:
+    cmd: /usr/local/sbin/qemu-tool-hostfs.sh
+  register: rocm_ernic_setup_hostfs_run
+  changed_when: "'is the host' in rocm_ernic_setup_hostfs_run.stdout"
+
+- name: Report what the host shares
+  ansible.builtin.debug:
+    msg: "{{ rocm_ernic_setup_hostfs_run.stdout | trim }}"

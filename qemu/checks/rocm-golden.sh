@@ -216,6 +216,15 @@ case ":${PATH}:" in *":${ROCM_PATH}/bin:"*) ;; *) exit 1 ;; esac
 test -d /opt/rocm/bin
 test -d /opt/rocm/lib
 test "$(readlink -f /opt/rocm/bin)" = "$(readlink -f "${ROCM_PATH}/bin")"
+# The seven names upstream's own package registers under /opt/rocm. A user
+# building against /opt/rocm/include found only bin and lib there.
+for sub in bin lib include llvm amdgcn libexec share; do
+    [ -d "${ROCM_PATH}/${sub}" ] || continue
+    if [ "$(readlink -f "/opt/rocm/${sub}")" != "$(readlink -f "${ROCM_PATH}/${sub}")" ]; then
+        echo "rocm: /opt/rocm/${sub} is not ${ROCM_PATH}/${sub}" >&2
+        exit 1
+    fi
+done
 
 # amd-smi, resolved through the non-login PATH above rather than by its path:
 # both halves of this are new, and a check that names the file would pass on a
@@ -1852,6 +1861,51 @@ else
     echo "hostname: ${_hn_want} is what the host calls this guest"
 fi
 # end: guest hostname
+
+# ---------------------------------------------------------------------------
+# A directory the host shares
+# ---------------------------------------------------------------------------
+# `run-vm --filesystem` gives a guest a 9p channel, and the image's
+# qemu-tool-hostfs unit mounts it at /mnt/host. Needs no share: with none the
+# unit has to have run, said so and exited 0, and every piece a share needs
+# has to be in the image. A guest that has one is asked that it is mounted.
+# begin: host share
+_hf_script=/usr/local/sbin/qemu-tool-hostfs.sh
+_hf_unit=qemu-tool-hostfs.service
+if [ ! -x "${_hf_script}" ]; then
+    echo "ERROR: hostfs: ${_hf_script} is missing: nothing mounts a" \
+         "directory the host shares" >&2
+    exit 1
+fi
+if [ "$(systemctl is-enabled "${_hf_unit}" 2>/dev/null)" != enabled ]; then
+    echo "ERROR: hostfs: ${_hf_unit} is not enabled" >&2
+    exit 1
+fi
+if systemctl is-failed --quiet "${_hf_unit}"; then
+    echo "ERROR: hostfs: ${_hf_unit} failed at boot" >&2
+    exit 1
+fi
+if ! command -v bindfs > /dev/null 2>&1; then
+    echo "ERROR: hostfs: bindfs is not installed: a share owned by a host" \
+         "uid that is not the login user's cannot be given to them" >&2
+    exit 1
+fi
+for _hf_module in 9p 9pnet_virtio; do
+    if ! modinfo "${_hf_module}" > /dev/null 2>&1 \
+            && [ ! -d "/sys/module/${_hf_module}" ]; then
+        echo "ERROR: hostfs: this kernel has no ${_hf_module} module" >&2
+        exit 1
+    fi
+done
+_hf_status=$("${_hf_script}" status)
+case "${_hf_status}" in
+    *"is not mounted"*)
+        echo "ERROR: ${_hf_status}" >&2
+        exit 1
+        ;;
+esac
+echo "${_hf_status}"
+# end: host share
 
 # ---------------------------------------------------------------------------
 # The host can hand the guest a udev rule

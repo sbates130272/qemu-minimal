@@ -160,6 +160,7 @@ class VMConfig:
 
     # ---- run-vm ----
     filesystem: str | None = None
+    filesystem_readonly: bool = False
     # nvme: None=off, digit-str=count, negative-digit-str=null_blk, else literal args
     # Put each vfio-user device behind its own pcie-root-port instead of on
     # the root complex. ON by default, because off is not merely cosmetic.

@@ -33,6 +33,7 @@ jobs:
             scripts/vm-report/*.sh \
             qemu/compose/*/tapsetup/*.sh \
             ansible/playbooks/roles/rocm_ernic_setup/files/qemu-tool-hostname.sh \
+            ansible/playbooks/roles/rocm_ernic_setup/files/qemu-tool-hostfs.sh \
             ansible/playbooks/roles/rocjitsu_setup/files/hipfile-target-check.sh \
             ansible/playbooks/roles/fio_hipfile_setup/files/fio-fetch.sh \
             ansible/playbooks/roles/rocm_xio_setup/files/rocm-xio-fetch.sh \

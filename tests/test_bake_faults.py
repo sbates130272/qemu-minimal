@@ -233,5 +233,30 @@ class Parser(unittest.TestCase):
         self.assertIn("Could not open", proc.stdout + proc.stderr)
 
 
+class NoJmespath(unittest.TestCase):
+    """gen-vm used to stop a bake when Ansible's Python could not import
+    jmespath, and tried to pip-install it. Nothing here needs the library,
+    and the check failed bakes on an Ansible whose environment has no pip
+    (a `uv tool` install). It is gone; these keep it from being needed
+    again without anybody noticing."""
+
+    def test_gen_vm_does_not_look_for_it(self):
+        text = (REPO / "qemu/qemu-tool/gen_vm.py").read_text()
+        self.assertNotIn("jmespath", text)
+
+    def test_no_playbook_or_role_uses_the_filter_that_needs_it(self):
+        users = []
+        for path in sorted((REPO / "ansible").rglob("*")):
+            if path.suffix not in (".yml", ".yaml", ".j2") or not path.is_file():
+                continue
+            text = path.read_text()
+            if "json_query" in text or "jmespath" in text:
+                users.append(str(path.relative_to(REPO)))
+        self.assertEqual(
+            users, [],
+            "json_query needs jmespath in Ansible's Python, which gen-vm no "
+            "longer checks for or installs")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

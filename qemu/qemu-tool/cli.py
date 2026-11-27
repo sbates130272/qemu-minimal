@@ -480,6 +480,22 @@ def _add_quick_start(sub: argparse._SubParsersAction) -> None:
         ),
     )
 
+    g.add_argument(
+        "--filesystem", type=Path, default=None, metavar="DIR",
+        help=(
+            "Share a host directory with every guest, writable. A guest "
+            "image with the qemu-tool-hostfs unit mounts it at /mnt/host, "
+            "owned there by the login user; on the host, what a guest "
+            "writes is your file, whoever wrote it in the guest. Read by "
+            "the up and all verbs, which also drop an earlier run's share "
+            "when it is not given. The guests' login key is published, so "
+            "share what a guest needs, not more."
+        ),
+    )
+    g.add_argument(
+        "--filesystem-readonly", action="store_true", default=False,
+        help="Share --filesystem read-only: no guest can change it.",
+    )
     g = p.add_argument_group("tests")
     g.add_argument(
         "--rdma-duration", type=int, default=None, metavar="SECONDS",
@@ -891,7 +907,16 @@ def _add_run_vm(
     )
     g.add_argument(
         "--filesystem", default=_UNSET, metavar="DIR",
-        help="Host directory to share with the guest over virtio-9p.",
+        help=(
+            "Host directory to share with the guest over virtio-9p, mount "
+            "tag hostfs; a guest image with the qemu-tool-hostfs unit mounts "
+            "it at /mnt/host. Every host access is made as the user QEMU "
+            "runs as, so files the guest writes are that user's."
+        ),
+    )
+    g.add_argument(
+        "--filesystem-readonly", action="store_true", default=_UNSET,
+        help="Share --filesystem read-only: the guest cannot change it.",
     )
 
     g = p.add_argument_group("NVMe")
@@ -1746,6 +1771,8 @@ def _quick_start_cmd(args: argparse.Namespace) -> None:
         hipfile_test=args.hipfile_test,
         xio_test=args.xio_test,
         vfu_doorbell=args.vfu_doorbell,
+        share=args.filesystem,
+        share_readonly=args.filesystem_readonly,
         variant=args.variant,
     )
 
@@ -2012,6 +2039,7 @@ def _extract_cli_overrides(
 
     if subcommand == "run-vm":
         _take("filesystem", "filesystem")
+        _take("filesystem_readonly", "filesystem_readonly")
         _take("vfio_user_root_port", "vfio_user_root_port")
         _take("vfio_user_switch_width", "vfio_user_switch_width")
         _take("cpu_sockets", "cpu_sockets")

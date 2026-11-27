@@ -233,7 +233,12 @@
         </xs:element>
         <xs:element name="vm-filesystem" type="f:kind.str" minOccurs="0">
           <xs:annotation>
-            <xs:documentation>Host directory shared into each guest over 9p with mount tag hostfs. one host path for all guests, or a comma list of exactly vm-count paths; run-vm --xml outside a stack ignores a list; default empty, no share.</xs:documentation>
+            <xs:documentation>Host directory shared into each guest over 9p, mounted at /mnt/host; read-only unless vm-filesystem-writable. one host path for all guests, or a comma list of exactly vm-count paths; run-vm --xml outside a stack ignores a list; default empty, no share.</xs:documentation>
+          </xs:annotation>
+        </xs:element>
+        <xs:element name="vm-filesystem-writable" type="f:kind.bool" minOccurs="0">
+          <xs:annotation>
+            <xs:documentation>Let guests write the vm-filesystem share; what they write is the file of the user the stack runs as. true or false; default false, the share is read-only; refused with no vm-filesystem.</xs:documentation>
           </xs:annotation>
         </xs:element>
         <xs:element name="vm-vfio-user-root-port" type="f:kind.bool" minOccurs="0">

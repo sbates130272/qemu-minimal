@@ -392,7 +392,6 @@ class AnsibleBoot(unittest.TestCase):
                 mock.patch.object(
                     gen_vm, "_wait_for_ssh",
                     side_effect=lambda *a, proc, **kw: proc.refused is None), \
-                mock.patch.object(gen_vm, "_ensure_jmespath"), \
                 mock.patch.object(gen_vm, "_ensure_ansible_collection"), \
                 mock.patch.object(gen_vm, "_restore_blocking_stdio"), \
                 mock.patch.object(gen_vm.subprocess, "run", side_effect=ran), \

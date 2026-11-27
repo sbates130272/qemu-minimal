@@ -56,20 +56,26 @@
   register: _rocjitsu_setup_rocm_environment
   changed_when: "'changed' in _rocjitsu_setup_rocm_environment.stdout"
 
-# Most ROCm documentation and third-party tooling spell /opt/rocm/bin and
-# /opt/rocm/lib literally, and the therock layout has neither. Only where
-# nothing holds the path: update-alternatives owns some names directly under
-# /opt/rocm, and a symlink over an alternatives slot is a conflict that
-# surfaces at the next ROCm upgrade.
+# Most ROCm documentation and third-party tooling spell /opt/rocm/bin,
+# /opt/rocm/include and the rest literally. Upstream provides those names
+# from the postinst of its amdrocm-core<line>-gfx* metapackage, which
+# registers seven with update-alternatives: bin, lib, include, llvm, amdgcn,
+# libexec and share. The minimal install here does not pull that package, so
+# the same seven are linked by hand, each where the tree has the directory.
+# Only where nothing holds the path: a symlink over an alternatives slot is
+# a conflict that surfaces at the next ROCm upgrade.
 - name: Link the versionless ROCm paths
   ansible.builtin.shell:
     cmd: |
       set -eu
-      for sub in bin lib; do
+      for sub in bin lib include llvm amdgcn libexec share; do
         if [ -e "/opt/rocm/$sub" ] || [ -L "/opt/rocm/$sub" ]; then
           continue
         fi
         if update-alternatives --query "rocm-$sub" > /dev/null 2>&1; then
+          continue
+        fi
+        if [ ! -d '{{ rocjitsu_setup_rocm_path }}'/"$sub" ]; then
           continue
         fi
         ln -s '{{ rocjitsu_setup_rocm_path }}'/"$sub" "/opt/rocm/$sub"

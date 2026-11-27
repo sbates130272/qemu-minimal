@@ -357,14 +357,51 @@ def _trace_args(cfg: VMConfig) -> list[str]:
     return args
 
 
+# The 9p mount tag of --filesystem, which the guest's qemu-tool-hostfs unit
+# looks for.
+HOSTFS_TAG = "hostfs"
+
+
+def virtfs_security_model(euid: int) -> str:
+    """How the guest's file ownership meets the host's, by who QEMU runs as.
+
+    QEMU does every host access as itself, so the share can never reach what
+    the user running it could not.
+
+    Not root, which is every stack and every ordinary run-vm: "none". Files
+    the guest makes are that user's on the host, with their real modes and
+    real symlinks, whoever made them in the guest; a chown in the guest is
+    refused. "passthrough", which this used to say, wants a root QEMU and
+    fails a create by any guest user but the one whose ids match.
+
+    Root: "mapped-xattr". With "none" a root QEMU applies the guest's ids on
+    the host, so root in the guest, which anyone holding the image's
+    published key is, would leave root-owned and setuid files there. Mapped,
+    the guest's ownership and modes are kept in extended attributes and the
+    host files stay plain files of root's.
+    """
+    return "mapped-xattr" if euid == 0 else "none"
+
+
 def _filesystem_args(cfg: VMConfig) -> list[str]:
     if cfg.filesystem is None:
+        if cfg.filesystem_readonly:
+            sys.exit("Error: --filesystem-readonly needs --filesystem DIR.")
         return []
-    return [
-        "-object", "memory-backend-memfd,id=mem0,size=2G",
-        "-virtfs",
-        f"local,path={cfg.filesystem},security_model=passthrough,mount_tag=hostfs",
-    ]
+    share = Path(cfg.filesystem)
+    if "," in cfg.filesystem:
+        sys.exit(f"Error: --filesystem {cfg.filesystem}: a path with a comma "
+                 "cannot be given to QEMU.")
+    if not cfg.dry_run and not share.is_dir():
+        sys.exit(f"Error: --filesystem {cfg.filesystem} is not a directory "
+                 "here. In a stack this is the qemu container, where the "
+                 "directory is bind-mounted at the same path.")
+    virtfs = (f"local,path={cfg.filesystem},"
+              f"security_model={virtfs_security_model(os.geteuid())},"
+              f"mount_tag={HOSTFS_TAG},multidevs=remap")
+    if cfg.filesystem_readonly:
+        virtfs += ",readonly=on"
+    return ["-virtfs", virtfs]
 
 
 def _pci_testdev_args(cfg: VMConfig) -> list[str]:
