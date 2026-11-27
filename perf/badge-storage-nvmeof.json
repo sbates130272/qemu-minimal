@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "NVMe-oF RDMA",
-  "message": "87.8 MB/s",
-  "color": "blue"
+  "message": "58.1 MB/s (-34%)",
+  "color": "red"
 }

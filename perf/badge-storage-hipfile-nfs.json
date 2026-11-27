@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "hipFile NFS RDMA",
-  "message": "153 MB/s",
-  "color": "blue"
+  "message": "105 MB/s (-31%)",
+  "color": "red"
 }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "NFS RDMA",
-  "message": "49 MB/s",
-  "color": "blue"
+  "message": "41.8 MB/s (-15%)",
+  "color": "yellow"
 }
