@@ -1124,7 +1124,7 @@ the same basic model used by the ROCm/rocm-ernic site: badges for the latest
 published numbers, a durable history file, and a trend page regenerated as new
 CI data lands.</p>
 <h2 id="latest-published-snapshot">Latest published snapshot<a class="headerlink" href="#latest-published-snapshot" title="Permanent link">&para;</a></h2>
-<p>Generated from <code>1781d9d6</code> at <strong>2026-11-27 21:21 UTC</strong>.</p>
+<p>Generated from <code>1781d9d6</code> at <strong>2026-11-27 21:39 UTC</strong>.</p>
 <p><img alt="Rocjitsu GEMM" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-gemm.json" />
 <img alt="Rocjitsu HipFile" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile.json" />
 <img alt="HipFile Fio" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fsbates130272.github.io%2Fqemu-minimal%2Fperf%2Fbadge-hipfile-fio.json" />
@@ -1186,33 +1186,33 @@ vfio-user and swing hard between runs.</p>
 </tr>
 <tr>
 <td>NVMe-oF in NIC</td>
-<td>131 MB/s</td>
-<td>144 MB/s</td>
-<td>watch (-9%)</td>
+<td>74.6 MB/s</td>
+<td>138 MB/s</td>
+<td>regressed (-46%)</td>
 </tr>
 <tr>
 <td>NVMe-oF RDMA</td>
-<td>58.1 MB/s</td>
-<td>87.8 MB/s</td>
-<td>regressed (-34%)</td>
+<td>32.5 MB/s</td>
+<td>73 MB/s</td>
+<td>regressed (-55%)</td>
 </tr>
 <tr>
 <td>NFS RDMA</td>
-<td>41.8 MB/s</td>
-<td>49 MB/s</td>
-<td>watch (-15%)</td>
+<td>17.6 MB/s</td>
+<td>45.4 MB/s</td>
+<td>regressed (-61%)</td>
 </tr>
 <tr>
 <td>hipFile NVMe-oF</td>
-<td>120 MB/s</td>
-<td>194 MB/s</td>
-<td>regressed (-38%)</td>
+<td>77.2 MB/s</td>
+<td>157 MB/s</td>
+<td>regressed (-51%)</td>
 </tr>
 <tr>
 <td>hipFile NFS RDMA</td>
-<td>105 MB/s</td>
-<td>153 MB/s</td>
-<td>regressed (-31%)</td>
+<td>50.5 MB/s</td>
+<td>129 MB/s</td>
+<td>regressed (-61%)</td>
 </tr>
 </tbody>
 </table>
@@ -1285,20 +1285,6 @@ after the change reached main, is the change named here.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td>b7a7012e</td>
-<td>2026-11-26 18:17 UTC</td>
-<td>333 kFLOP/s</td>
-<td>564 MB/s</td>
-<td>339 MB/s</td>
-<td>81.3 MB/s</td>
-<td>2082.4 MB/s</td>
-<td>n/a</td>
-<td>n/a</td>
-<td>n/a</td>
-<td>n/a</td>
-<td>n/a</td>
-</tr>
 <tr>
 <td>5ec4c6cd</td>
 <td>2026-11-26 19:25 UTC</td>
@@ -1424,6 +1410,20 @@ after the change reached main, is the change named here.</p>
 <td>41.8 MB/s</td>
 <td>120 MB/s</td>
 <td>105 MB/s</td>
+</tr>
+<tr>
+<td>1781d9d6</td>
+<td>2026-11-27 21:39 UTC</td>
+<td>294 kFLOP/s</td>
+<td>453 MB/s</td>
+<td>818 MB/s</td>
+<td>61.0 MB/s</td>
+<td>1480.2 MB/s</td>
+<td>74.6 MB/s</td>
+<td>32.5 MB/s</td>
+<td>17.6 MB/s</td>
+<td>77.2 MB/s</td>
+<td>50.5 MB/s</td>
 </tr>
 </tbody>
 </table>
