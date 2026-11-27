@@ -19,7 +19,7 @@ file up to date as infrastructure changes.
 - `qemu/schema/fleet.rng`, `qemu/schema/fleet.xsd` and `docs/fleet-xml.md` — the RELAX NG schema for fleet XML, the XSD 1.0 one and their reference page. All three are **generated** by `qemu-tool fleet-schema` (`qemu/qemu-tool/fleet_schema.py`) from the parser's tables; do not hand-edit any. See "The schema and the reference page"
 - `docs/api/` + `.mkdocs/`: the Python API pages of the site. `docs/api/*.md` name the modules; mkdocstrings builds the text from the docstrings under `qemu/qemu-tool/` when the site is built, and none of it is committed. `.mkdocs/qemu_tool` is a symlink to `../qemu/qemu-tool`, which is how the build finds a package whose directory has a hyphen, `.mkdocs/griffe_qemu_tool.py` is the griffe extension the build loads, and `.mkdocs/templates/` holds two mkdocstrings templates that keep source out of the site search. See "The published site"
 - `qemu/qemu-tool/quick_start.py` + `ansible/playbooks/vm-quickstart.yml` — the README's Quick Start, which is `qemu-tool quick-start`: two guests from the published qcow2, Prometheus, Grafana and log collection beside them, plus a GPU test and an inter-guest RDMA test. It runs `qemu/stacks/rocm-golden.xml` unless given `--xml` or `--flavor`; `--flavor default` is that fleet. The daily `report-for-vm-rocm-golden` lane runs *that subcommand*, not a copy of its steps. It replaced the shell script that used to live under `scripts/`, which is deleted; do not reintroduce a shell wrapper beside it. The guests are sized from the host by default (4 vCPU floor, 8 ceiling), and every prompt it asks takes its default answer when stdin is not a terminal, so CI needs no flag to stay non-interactive
-- `images/` — qcow2 VM disk images (backing + overlay pairs, **not** `/var/lib/qemu-tool/images`)
+- `images/` — git-ignored; older local guest images. Stacks use `/var/lib/qemu-tool/images`, see "VM images"
 - `ansible/playbooks/` — five playbooks and ten roles, and nothing else:
   - `vm-basic.yml` — a complete bake on its own, and the base of the golden
   - `vm-rocm-golden.yml` — the one image beyond it: imports `vm-basic.yml`, then the mainline kernel and ernic prerequisites, ROCm, the rocjitsu roles, SRQ + P4, SDXI, perftest and fio built from source, and one slim pass. Every bake play is tagged `install`; `tests/test_playbook_pins.py` fails a play with no tag, because an untagged play runs in every bake. Three plays need a device and are tagged `never`: `--tags configure` sets up the NIC and builds no driver (known issue 16 says why it must not), `--tags firmware` installs `ip_discovery.bin` from the rocjitsu serving the guest, and `--tags test` runs the GPU workloads. The pins (`ionic_kernel_pin` with `ionic_kernel_pin_commit` and `ionic_kernel_mirror`, `ernic_source_pin`, `rocm_line_pin`, `sdxi_source_pin`, `perftest_source_pin`, `fio_source_pin`) are each defined once and shared between plays through YAML anchors; see "Where the ionic kernel sources come from" for the first three. Its defaults are a published image's, and a bake needs no Docker daemon when given `-e rocjitsu_firmware_script=<path to vfio_guest_firmware.py>`. Given a cache directory (`gen-vm --bake --cache-dir DIR`, or `<bake-cache-dir>` in a fleet file, which reaches the playbook as the extra var `bake_cache_dir`) the module builds go through a compiler cache kept in that directory; there is none by default, and the two workflows that bake the guest, the playbook-test lane and the publish workflow, each pass one and share what it holds — see "The bake's compiler cache". The slim play also purges every kernel but the running one, after asserting that is the pinned one — see "One kernel in the baked image". The acceptance test is `qemu/checks/rocm-golden.sh`, which the playbook-test lane runs against the baked guest and batesste-ci-images runs against the published one
@@ -37,36 +37,18 @@ file up to date as infrastructure changes.
 
 ## VM images
 
-All qcow2 images on this development host live at **`<repo-root>/images/`**
-(i.e. `/home/stebates/Projects/qemu-minimal/images/`), not at the default
-`/var/lib/qemu-tool/images`. That is a per-host fact, so it is never in a
-committed file: pass `--images`, or set `<vm-images-dir>` in a local fleet XML
-(`qemu/stacks/fleet.xml` is on the search path and git-ignored).
+Guest images on this development host are in the default place,
+`/var/lib/qemu-tool/images`. `<repo-root>/images/` is git-ignored and holds
+a few older guests that no stack uses. Where images live is a per-host
+fact, so it is never in a committed file: pass `--images`, or set
+`<vm-images-dir>` in a local fleet XML (`qemu/stacks/fleet.xml` is on the
+search path and git-ignored).
 
-A local two-guest ernic pair, both on one backing file:
+SSH access when a stack is running: `qemu-tool ssh <vm>` resolves the port,
+the user and the key. By hand, `<ssh-port-base>` is 2222 and guest *n* gets
+the next port up, with the image's own account and key.
 
-| VM   | Overlay                      | Backing                       |
-|------|------------------------------|-------------------------------|
-| VM1  | `stebates-ernic-vm-1.qcow2`   | `stebates-ernic-base.qcow2`   |
-| VM2  | `stebates-ernic-vm-2.qcow2`   | `stebates-ernic-base.qcow2`   |
-
-Base image is 12G (compressed from 28G used filesystem, 95G virtual).
-Both VMs share the same backing; only delta writes go into their overlays.
-Kernel: `7.0.0-31-generic` (HWE). Recreate overlays with:
-```bash
-qemu-img create -f qcow2 -b stebates-ernic-base.qcow2 -F qcow2 stebates-ernic-vm-1.qcow2
-qemu-img create -f qcow2 -b stebates-ernic-base.qcow2 -F qcow2 stebates-ernic-vm-2.qcow2
-```
-
-SSH access (when a stack is running; `<ssh-port-base>` is 2222 and guest *n*
-gets the next port up):
-
-```
-ssh -p 2222 stebates@localhost   # VM1
-ssh -p 2223 stebates@localhost   # VM2
-```
-
-Those two images predate it, but **`gen-vm` no longer authorises
+**`gen-vm` does not authorise
 `~/.ssh/id_rsa.pub` by default.** `VMConfig.ssh_key_file` is `None`, and what
 happens then depends on what the run creates:
 
@@ -3432,11 +3414,14 @@ uid 1000, never reads, so `vm-storage.yml` stopped at its first
 Both guests had booted and the GPU play had passed. The install now runs
 as the playbook's user, and a test holds that. The golden report lane
 installs the same way and gets away with it because `vm-quickstart.yml`
-uses no module from a collection. **No run has reached the tests.** On a
-4-core runner the guests get the 4 vCPU floor, two to
-one oversubscribed, which no storage run has been at. The rates are one
-small transfer each and will move between runs: a red badge there is
-noise before it is a regression.
+uses no module from a collection. **The run after that fix passed**, on the
+merge of PR #260 (run 45911639057, 17 minutes): 13 of 13 tests, with the
+guests at the 4 vCPU floor on a 4-core runner, two to one oversubscribed.
+Its five tracked rates: NVMe-oF in the NIC 144 MB/s, NVMe-oF over RDMA to
+the server 87.8 MB/s, NFS over RDMA 49 MB/s, hipFile from the server's
+NVMe-oF 194 MB/s and hipFile from NFS over RDMA 153 MB/s. That is one run.
+The rates are one small transfer each and will move between runs: a red
+badge there is noise before it is a regression.
 
 **Not run**: any lane, and the flavor on any other host; guests at the
 fleet file's 4 vCPU; a hipObject object larger than 1 MiB (known issue 18's
