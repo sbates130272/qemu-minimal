@@ -746,6 +746,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.config.VMConfig.filesystem_readonly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;filesystem_readonly
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.config.VMConfig.vfio_user_root_port" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1489,6 +1500,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.run_vm.HOSTFS_TAG" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;HOSTFS_TAG
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.run_vm.build_command" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1526,6 +1548,17 @@
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;amd64_cpu_arg
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#qemu_tool.run_vm.virtfs_security_model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;virtfs_security_model
       
     </span>
   </a>
@@ -2417,6 +2450,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.config.VMConfig.filesystem_readonly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;filesystem_readonly
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.config.VMConfig.vfio_user_root_port" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3160,6 +3204,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.run_vm.HOSTFS_TAG" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;HOSTFS_TAG
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.run_vm.build_command" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3197,6 +3252,17 @@
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;amd64_cpu_arg
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#qemu_tool.run_vm.virtfs_security_model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;virtfs_security_model
       
     </span>
   </a>
@@ -4009,7 +4075,8 @@ libvirt domain file.</p>
 <span class="normal">279</span>
 <span class="normal">280</span>
 <span class="normal">281</span>
-<span class="normal">282</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
+<span class="normal">282</span>
+<span class="normal">283</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">VMConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The settings of one guest: what `run-vm` and `gen-vm` are told.</span>
 
@@ -4036,6 +4103,7 @@ libvirt domain file.</p>
 
     <span class="c1"># ---- run-vm ----</span>
     <span class="n">filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">filesystem_readonly</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="c1"># nvme: None=off, digit-str=count, negative-digit-str=null_blk, else literal args</span>
     <span class="c1"># Put each vfio-user device behind its own pcie-root-port instead of on</span>
     <span class="c1"># the root complex. ON by default, because off is not merely cosmetic.</span>
@@ -4416,6 +4484,29 @@ libvirt domain file.</p>
 
 <a href="#qemu_tool.config.VMConfig.filesystem" class="headerlink" title="Permanent link">&para;</a></h4>
 <div class="doc-signature highlight"><pre><span></span><code><span class="n">filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="qemu_tool.config.VMConfig.filesystem_readonly" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <span class="doc doc-object-name doc-attribute-name">filesystem_readonly</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#qemu_tool.config.VMConfig.filesystem_readonly" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">filesystem_readonly</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -6465,6 +6556,28 @@ replaces this process with QEMU, or prints the command with <code>--dry-run</cod
 
 </div>
 
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="qemu_tool.run_vm.HOSTFS_TAG" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <span class="doc doc-object-name doc-attribute-name">HOSTFS_TAG</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#qemu_tool.run_vm.HOSTFS_TAG" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">HOSTFS_TAG</span> <span class="o">=</span> <span class="s1">'hostfs'</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+    </div>
+
+</div>
+
 
 
 
@@ -6762,6 +6875,82 @@ it names something only one running QEMU can hold.</p>
 <div class="doc doc-object doc-function">
 
 
+<h3 id="qemu_tool.run_vm.virtfs_security_model" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <span class="doc doc-object-name doc-function-name">virtfs_security_model</span>
+
+
+<a href="#qemu_tool.run_vm.virtfs_security_model" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">virtfs_security_model</span><span class="p">(</span><span class="n">euid</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>How the guest's file ownership meets the host's, by who QEMU runs as.</p>
+<p>QEMU does every host access as itself, so the share can never reach what
+the user running it could not.</p>
+<p>Not root, which is every stack and every ordinary run-vm: "none". Files
+the guest makes are that user's on the host, with their real modes and
+real symlinks, whoever made them in the guest; a chown in the guest is
+refused. "passthrough", which this used to say, wants a root QEMU and
+fails a create by any guest user but the one whose ids match.</p>
+<p>Root: "mapped-xattr". With "none" a root QEMU applies the guest's ids on
+the host, so root in the guest, which anyone holding the image's
+published key is, would leave root-owned and setuid files there. Mapped,
+the guest's ownership and modes are kept in extended attributes and the
+host files stay plain files of root's.</p>
+
+
+  <section data-search-exclude>
+                <details class="mkdocstrings-source">
+              <summary>Source code in <code>qemu/qemu-tool/run_vm.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">365</span>
+<span class="normal">366</span>
+<span class="normal">367</span>
+<span class="normal">368</span>
+<span class="normal">369</span>
+<span class="normal">370</span>
+<span class="normal">371</span>
+<span class="normal">372</span>
+<span class="normal">373</span>
+<span class="normal">374</span>
+<span class="normal">375</span>
+<span class="normal">376</span>
+<span class="normal">377</span>
+<span class="normal">378</span>
+<span class="normal">379</span>
+<span class="normal">380</span>
+<span class="normal">381</span>
+<span class="normal">382</span>
+<span class="normal">383</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">virtfs_security_model</span><span class="p">(</span><span class="n">euid</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""How the guest's file ownership meets the host's, by who QEMU runs as.</span>
+
+<span class="sd">    QEMU does every host access as itself, so the share can never reach what</span>
+<span class="sd">    the user running it could not.</span>
+
+<span class="sd">    Not root, which is every stack and every ordinary run-vm: "none". Files</span>
+<span class="sd">    the guest makes are that user's on the host, with their real modes and</span>
+<span class="sd">    real symlinks, whoever made them in the guest; a chown in the guest is</span>
+<span class="sd">    refused. "passthrough", which this used to say, wants a root QEMU and</span>
+<span class="sd">    fails a create by any guest user but the one whose ids match.</span>
+
+<span class="sd">    Root: "mapped-xattr". With "none" a root QEMU applies the guest's ids on</span>
+<span class="sd">    the host, so root in the guest, which anyone holding the image's</span>
+<span class="sd">    published key is, would leave root-owned and setuid files there. Mapped,</span>
+<span class="sd">    the guest's ownership and modes are kept in extended attributes and the</span>
+<span class="sd">    host files stay plain files of root's.</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="s2">"mapped-xattr"</span> <span class="k">if</span> <span class="n">euid</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">"none"</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+
+  </section>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="qemu_tool.run_vm.nvme_block_props" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <span class="doc doc-object-name doc-function-name">nvme_block_props</span>
 
@@ -6788,28 +6977,28 @@ without the option is the one it always was.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/run_vm.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">394</span>
-<span class="normal">395</span>
-<span class="normal">396</span>
-<span class="normal">397</span>
-<span class="normal">398</span>
-<span class="normal">399</span>
-<span class="normal">400</span>
-<span class="normal">401</span>
-<span class="normal">402</span>
-<span class="normal">403</span>
-<span class="normal">404</span>
-<span class="normal">405</span>
-<span class="normal">406</span>
-<span class="normal">407</span>
-<span class="normal">408</span>
-<span class="normal">409</span>
-<span class="normal">410</span>
-<span class="normal">411</span>
-<span class="normal">412</span>
-<span class="normal">413</span>
-<span class="normal">414</span>
-<span class="normal">415</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">nvme_block_props</span><span class="p">(</span><span class="n">cfg</span><span class="p">:</span> <span class="n">VMConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">431</span>
+<span class="normal">432</span>
+<span class="normal">433</span>
+<span class="normal">434</span>
+<span class="normal">435</span>
+<span class="normal">436</span>
+<span class="normal">437</span>
+<span class="normal">438</span>
+<span class="normal">439</span>
+<span class="normal">440</span>
+<span class="normal">441</span>
+<span class="normal">442</span>
+<span class="normal">443</span>
+<span class="normal">444</span>
+<span class="normal">445</span>
+<span class="normal">446</span>
+<span class="normal">447</span>
+<span class="normal">448</span>
+<span class="normal">449</span>
+<span class="normal">450</span>
+<span class="normal">451</span>
+<span class="normal">452</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">nvme_block_props</span><span class="p">(</span><span class="n">cfg</span><span class="p">:</span> <span class="n">VMConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The block-size properties of a namespace run-vm creates, or "".</span>
 
 <span class="sd">    --nvme-block-size sets the logical and the physical block size alike,</span>

@@ -1241,6 +1241,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.fleet_xml.FleetConfig.vm_filesystem_writable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;vm_filesystem_writable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.fleet_xml.FleetConfig.vm_vfio_user_root_port" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3175,6 +3186,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.fleet_xml.FleetConfig.vm_filesystem_writable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;vm_filesystem_writable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.fleet_xml.FleetConfig.vm_vfio_user_root_port" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4292,7 +4314,9 @@ file takes the flag.</p>
 <span class="normal">88</span>
 <span class="normal">89</span>
 <span class="normal">90</span>
-<span class="normal">91</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">vm_overrides</span><span class="p">(</span><span class="n">fleet</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+<span class="normal">91</span>
+<span class="normal">92</span>
+<span class="normal">93</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">vm_overrides</span><span class="p">(</span><span class="n">fleet</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""The VMConfig fields a fleet's per-VM defaults set.</span>
 
 <span class="sd">    Two fields are applied whatever the file says, because FleetConfig</span>
@@ -4332,6 +4356,8 @@ file takes the flag.</p>
     <span class="c1"># knowable here, so only a single value is applied.</span>
     <span class="k">if</span> <span class="n">fleet</span><span class="o">.</span><span class="n">vm_filesystem</span> <span class="ow">and</span> <span class="s2">","</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">fleet</span><span class="o">.</span><span class="n">vm_filesystem</span><span class="p">:</span>
         <span class="n">out</span><span class="p">[</span><span class="s2">"filesystem"</span><span class="p">]</span> <span class="o">=</span> <span class="n">fleet</span><span class="o">.</span><span class="n">vm_filesystem</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">fleet</span><span class="o">.</span><span class="n">vm_filesystem_writable</span><span class="p">:</span>
+            <span class="n">out</span><span class="p">[</span><span class="s2">"filesystem_readonly"</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="k">if</span> <span class="n">fleet</span><span class="o">.</span><span class="n">vm_extra_hostfwd</span><span class="p">:</span>
         <span class="c1"># Several rules for ONE VM, not one rule per VM.</span>
         <span class="n">out</span><span class="p">[</span><span class="s2">"extra_hostfwd"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
@@ -4383,9 +4409,7 @@ The &lt;bake-*&gt; elements go on top.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/settings.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 94</span>
-<span class="normal"> 95</span>
-<span class="normal"> 96</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 96</span>
 <span class="normal"> 97</span>
 <span class="normal"> 98</span>
 <span class="normal"> 99</span>
@@ -4424,7 +4448,9 @@ The &lt;bake-*&gt; elements go on top.</p>
 <span class="normal">132</span>
 <span class="normal">133</span>
 <span class="normal">134</span>
-<span class="normal">135</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">bake_overrides</span><span class="p">(</span><span class="n">fleet</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+<span class="normal">135</span>
+<span class="normal">136</span>
+<span class="normal">137</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">bake_overrides</span><span class="p">(</span><span class="n">fleet</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""The VMConfig fields `gen-vm --bake` takes from a fleet.</span>
 
 <span class="sd">    The per-VM defaults, less those that describe a running fleet rather</span>
@@ -4495,10 +4521,10 @@ The &lt;bake-*&gt; elements go on top.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/settings.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">138</span>
-<span class="normal">139</span>
-<span class="normal">140</span>
-<span class="normal">141</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load</span><span class="p">(</span><span class="n">explicit</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">140</span>
+<span class="normal">141</span>
+<span class="normal">142</span>
+<span class="normal">143</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load</span><span class="p">(</span><span class="n">explicit</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""find() + parse + vm_overrides(); {} when there is no settings file."""</span>
     <span class="n">fleet</span> <span class="o">=</span> <span class="n">load_fleet</span><span class="p">(</span><span class="n">explicit</span><span class="p">)</span>
     <span class="k">return</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">fleet</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">vm_overrides</span><span class="p">(</span><span class="n">fleet</span><span class="p">)</span>
@@ -4531,10 +4557,10 @@ The &lt;bake-*&gt; elements go on top.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/settings.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">144</span>
-<span class="normal">145</span>
-<span class="normal">146</span>
-<span class="normal">147</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_bake</span><span class="p">(</span><span class="n">explicit</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">146</span>
+<span class="normal">147</span>
+<span class="normal">148</span>
+<span class="normal">149</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_bake</span><span class="p">(</span><span class="n">explicit</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""load(), for a bake: find() + parse + bake_overrides()."""</span>
     <span class="n">fleet</span> <span class="o">=</span> <span class="n">load_fleet</span><span class="p">(</span><span class="n">explicit</span><span class="p">)</span>
     <span class="k">return</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">fleet</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">bake_overrides</span><span class="p">(</span><span class="n">fleet</span><span class="p">)</span>
@@ -5488,7 +5514,10 @@ a file.</p>
 <span class="normal">674</span>
 <span class="normal">675</span>
 <span class="normal">676</span>
-<span class="normal">677</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclasses</span><span class="o">.</span><span class="n">dataclass</span>
+<span class="normal">677</span>
+<span class="normal">678</span>
+<span class="normal">679</span>
+<span class="normal">680</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclasses</span><span class="o">.</span><span class="n">dataclass</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">FleetConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The settings of one fleet, as fleet XML states them.</span>
 
@@ -5589,6 +5618,9 @@ a file.</p>
     <span class="n">vm_username</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"ubuntu"</span>
     <span class="n">vm_password</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span>
     <span class="n">vm_filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span>
+    <span class="c1"># Whether guests may write the share. Off, every qemu-N gets</span>
+    <span class="c1"># run-vm --filesystem-readonly and the directory is bound read-only.</span>
+    <span class="n">vm_filesystem_writable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="c1"># True, matching VMConfig: off leaves a GPU with a 16M 32-bit BAR that</span>
     <span class="c1"># amdgpu cannot initialise. See the comment on VMConfig.vfio_user_root_port.</span>
     <span class="n">vm_vfio_user_root_port</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
@@ -6595,6 +6627,29 @@ a file.</p>
 
 
 
+<h4 id="qemu_tool.fleet_xml.FleetConfig.vm_filesystem_writable" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <span class="doc doc-object-name doc-attribute-name">vm_filesystem_writable</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-class-attribute"><code>class-attribute</code></small>
+      <small class="doc doc-label doc-label-instance-attribute"><code>instance-attribute</code></small>
+  </span>
+
+<a href="#qemu_tool.fleet_xml.FleetConfig.vm_filesystem_writable" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">vm_filesystem_writable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
 <h4 id="qemu_tool.fleet_xml.FleetConfig.vm_vfio_user_root_port" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <span class="doc doc-object-name doc-attribute-name">vm_vfio_user_root_port</span>
 
@@ -7556,17 +7611,7 @@ fleet XML.</p>
   <section data-search-exclude>
                   <details class="mkdocstrings-source">
                 <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1797</span>
-<span class="normal">1798</span>
-<span class="normal">1799</span>
-<span class="normal">1800</span>
-<span class="normal">1801</span>
-<span class="normal">1802</span>
-<span class="normal">1803</span>
-<span class="normal">1804</span>
-<span class="normal">1805</span>
-<span class="normal">1806</span>
-<span class="normal">1807</span>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1807</span>
 <span class="normal">1808</span>
 <span class="normal">1809</span>
 <span class="normal">1810</span>
@@ -7787,7 +7832,17 @@ fleet XML.</p>
 <span class="normal">2025</span>
 <span class="normal">2026</span>
 <span class="normal">2027</span>
-<span class="normal">2028</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">FleetXml</span><span class="p">:</span>
+<span class="normal">2028</span>
+<span class="normal">2029</span>
+<span class="normal">2030</span>
+<span class="normal">2031</span>
+<span class="normal">2032</span>
+<span class="normal">2033</span>
+<span class="normal">2034</span>
+<span class="normal">2035</span>
+<span class="normal">2036</span>
+<span class="normal">2037</span>
+<span class="normal">2038</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">FleetXml</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Fleet XML files in, a `FleetConfig` out, and back.</span>
 
 <span class="sd">    A namespace of static and class methods; nothing instantiates it.</span>
@@ -8063,17 +8118,7 @@ fleet XML.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1809</span>
-<span class="normal">1810</span>
-<span class="normal">1811</span>
-<span class="normal">1812</span>
-<span class="normal">1813</span>
-<span class="normal">1814</span>
-<span class="normal">1815</span>
-<span class="normal">1816</span>
-<span class="normal">1817</span>
-<span class="normal">1818</span>
-<span class="normal">1819</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1819</span>
 <span class="normal">1820</span>
 <span class="normal">1821</span>
 <span class="normal">1822</span>
@@ -8092,7 +8137,17 @@ fleet XML.</p>
 <span class="normal">1835</span>
 <span class="normal">1836</span>
 <span class="normal">1837</span>
-<span class="normal">1838</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@staticmethod</span>
+<span class="normal">1838</span>
+<span class="normal">1839</span>
+<span class="normal">1840</span>
+<span class="normal">1841</span>
+<span class="normal">1842</span>
+<span class="normal">1843</span>
+<span class="normal">1844</span>
+<span class="normal">1845</span>
+<span class="normal">1846</span>
+<span class="normal">1847</span>
+<span class="normal">1848</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@staticmethod</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">find</span><span class="p">(</span><span class="n">explicit</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Return fleet XML files to use, lowest precedence first.</span>
 
@@ -8155,14 +8210,14 @@ same validation parse() enforces.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1888</span>
-<span class="normal">1889</span>
-<span class="normal">1890</span>
-<span class="normal">1891</span>
-<span class="normal">1892</span>
-<span class="normal">1893</span>
-<span class="normal">1894</span>
-<span class="normal">1895</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1898</span>
+<span class="normal">1899</span>
+<span class="normal">1900</span>
+<span class="normal">1901</span>
+<span class="normal">1902</span>
+<span class="normal">1903</span>
+<span class="normal">1904</span>
+<span class="normal">1905</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">problems</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""What is wrong with a fleet XML file, one line each; [] when valid.</span>
 
@@ -8204,17 +8259,7 @@ types of server, and a count set after a &lt;devices&gt; block.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1897</span>
-<span class="normal">1898</span>
-<span class="normal">1899</span>
-<span class="normal">1900</span>
-<span class="normal">1901</span>
-<span class="normal">1902</span>
-<span class="normal">1903</span>
-<span class="normal">1904</span>
-<span class="normal">1905</span>
-<span class="normal">1906</span>
-<span class="normal">1907</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1907</span>
 <span class="normal">1908</span>
 <span class="normal">1909</span>
 <span class="normal">1910</span>
@@ -8227,7 +8272,17 @@ types of server, and a count set after a &lt;devices&gt; block.</p>
 <span class="normal">1917</span>
 <span class="normal">1918</span>
 <span class="normal">1919</span>
-<span class="normal">1920</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
+<span class="normal">1920</span>
+<span class="normal">1921</span>
+<span class="normal">1922</span>
+<span class="normal">1923</span>
+<span class="normal">1924</span>
+<span class="normal">1925</span>
+<span class="normal">1926</span>
+<span class="normal">1927</span>
+<span class="normal">1928</span>
+<span class="normal">1929</span>
+<span class="normal">1930</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">layer_problems</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">paths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""What is wrong with these files as LAYERS; [] when they merge.</span>
 
@@ -8284,14 +8339,14 @@ names the field.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1930</span>
-<span class="normal">1931</span>
-<span class="normal">1932</span>
-<span class="normal">1933</span>
-<span class="normal">1934</span>
-<span class="normal">1935</span>
-<span class="normal">1936</span>
-<span class="normal">1937</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1940</span>
+<span class="normal">1941</span>
+<span class="normal">1942</span>
+<span class="normal">1943</span>
+<span class="normal">1944</span>
+<span class="normal">1945</span>
+<span class="normal">1946</span>
+<span class="normal">1947</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">fields_set</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">frozenset</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""The FleetConfig fields PATH itself sets, as against defaults.</span>
 
@@ -8330,12 +8385,12 @@ names the field.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1939</span>
-<span class="normal">1940</span>
-<span class="normal">1941</span>
-<span class="normal">1942</span>
-<span class="normal">1943</span>
-<span class="normal">1944</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1949</span>
+<span class="normal">1950</span>
+<span class="normal">1951</span>
+<span class="normal">1952</span>
+<span class="normal">1953</span>
+<span class="normal">1954</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">parse</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="n">Path</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FleetConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Parse a fleet XML file into a FleetConfig."""</span>
     <span class="n">cfg</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">_parse_with_fields</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
@@ -8372,17 +8427,7 @@ names the field.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1946</span>
-<span class="normal">1947</span>
-<span class="normal">1948</span>
-<span class="normal">1949</span>
-<span class="normal">1950</span>
-<span class="normal">1951</span>
-<span class="normal">1952</span>
-<span class="normal">1953</span>
-<span class="normal">1954</span>
-<span class="normal">1955</span>
-<span class="normal">1956</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1956</span>
 <span class="normal">1957</span>
 <span class="normal">1958</span>
 <span class="normal">1959</span>
@@ -8413,7 +8458,17 @@ names the field.</p>
 <span class="normal">1984</span>
 <span class="normal">1985</span>
 <span class="normal">1986</span>
-<span class="normal">1987</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
+<span class="normal">1987</span>
+<span class="normal">1988</span>
+<span class="normal">1989</span>
+<span class="normal">1990</span>
+<span class="normal">1991</span>
+<span class="normal">1992</span>
+<span class="normal">1993</span>
+<span class="normal">1994</span>
+<span class="normal">1995</span>
+<span class="normal">1996</span>
+<span class="normal">1997</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">emit</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">cfg</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Serialise a FleetConfig to fleet XML (flat element format)."""</span>
     <span class="n">ET</span><span class="o">.</span><span class="n">register_namespace</span><span class="p">(</span><span class="s2">""</span><span class="p">,</span> <span class="n">NS_FLEET</span><span class="p">)</span>
@@ -8488,17 +8543,7 @@ default value (e.g., ernic_tap=false when the base set it to true).</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1989</span>
-<span class="normal">1990</span>
-<span class="normal">1991</span>
-<span class="normal">1992</span>
-<span class="normal">1993</span>
-<span class="normal">1994</span>
-<span class="normal">1995</span>
-<span class="normal">1996</span>
-<span class="normal">1997</span>
-<span class="normal">1998</span>
-<span class="normal">1999</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1999</span>
 <span class="normal">2000</span>
 <span class="normal">2001</span>
 <span class="normal">2002</span>
@@ -8519,7 +8564,17 @@ default value (e.g., ernic_tap=false when the base set it to true).</p>
 <span class="normal">2017</span>
 <span class="normal">2018</span>
 <span class="normal">2019</span>
-<span class="normal">2020</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
+<span class="normal">2020</span>
+<span class="normal">2021</span>
+<span class="normal">2022</span>
+<span class="normal">2023</span>
+<span class="normal">2024</span>
+<span class="normal">2025</span>
+<span class="normal">2026</span>
+<span class="normal">2027</span>
+<span class="normal">2028</span>
+<span class="normal">2029</span>
+<span class="normal">2030</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">parse_layers</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">paths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">FleetConfig</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Parse and merge multiple fleet XML files, later files win.</span>
 
@@ -8584,13 +8639,13 @@ default value (e.g., ernic_tap=false when the base set it to true).</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2022</span>
-<span class="normal">2023</span>
-<span class="normal">2024</span>
-<span class="normal">2025</span>
-<span class="normal">2026</span>
-<span class="normal">2027</span>
-<span class="normal">2028</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2032</span>
+<span class="normal">2033</span>
+<span class="normal">2034</span>
+<span class="normal">2035</span>
+<span class="normal">2036</span>
+<span class="normal">2037</span>
+<span class="normal">2038</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@classmethod</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">load</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">explicit</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FleetConfig</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""find() + parse(), returns None when no fleet XML is found."""</span>
     <span class="n">paths</span> <span class="o">=</span> <span class="bp">cls</span><span class="o">.</span><span class="n">find</span><span class="p">(</span><span class="n">explicit</span><span class="p">)</span>
@@ -9081,10 +9136,7 @@ for any other length, naming the element and both lengths.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">687</span>
-<span class="normal">688</span>
-<span class="normal">689</span>
-<span class="normal">690</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">690</span>
 <span class="normal">691</span>
 <span class="normal">692</span>
 <span class="normal">693</span>
@@ -9093,7 +9145,10 @@ for any other length, naming the element and both lengths.</p>
 <span class="normal">696</span>
 <span class="normal">697</span>
 <span class="normal">698</span>
-<span class="normal">699</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">per_vm</span><span class="p">(</span><span class="n">values</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">count</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">element</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+<span class="normal">699</span>
+<span class="normal">700</span>
+<span class="normal">701</span>
+<span class="normal">702</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">per_vm</span><span class="p">(</span><span class="n">values</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">count</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">element</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""The value of a per-guest integer setting for each of `count` guests.</span>
 
 <span class="sd">    One value is every guest's; `count` values apply by position. ValueError</span>
@@ -9133,10 +9188,10 @@ for any other length, naming the element and both lengths.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1396</span>
-<span class="normal">1397</span>
-<span class="normal">1398</span>
-<span class="normal">1399</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">removed_element_problem</span><span class="p">(</span><span class="n">tag</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1406</span>
+<span class="normal">1407</span>
+<span class="normal">1408</span>
+<span class="normal">1409</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">removed_element_problem</span><span class="p">(</span><span class="n">tag</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The parse problem for an element in REMOVED_ELEMENTS."""</span>
     <span class="k">return</span> <span class="p">(</span><span class="sa">f</span><span class="s2">"&lt;</span><span class="si">{</span><span class="n">tag</span><span class="si">}</span><span class="s2">&gt; was removed from the fleet format: "</span>
             <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">REMOVED_ELEMENTS</span><span class="p">[</span><span class="n">tag</span><span class="p">]</span><span class="si">}</span><span class="s2">. Delete the element."</span><span class="p">)</span>
@@ -9170,16 +9225,16 @@ was meant and is not offered.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1402</span>
-<span class="normal">1403</span>
-<span class="normal">1404</span>
-<span class="normal">1405</span>
-<span class="normal">1406</span>
-<span class="normal">1407</span>
-<span class="normal">1408</span>
-<span class="normal">1409</span>
-<span class="normal">1410</span>
-<span class="normal">1411</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">removed_lookalike_problem</span><span class="p">(</span><span class="n">tag</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">removed</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1412</span>
+<span class="normal">1413</span>
+<span class="normal">1414</span>
+<span class="normal">1415</span>
+<span class="normal">1416</span>
+<span class="normal">1417</span>
+<span class="normal">1418</span>
+<span class="normal">1419</span>
+<span class="normal">1420</span>
+<span class="normal">1421</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">removed_lookalike_problem</span><span class="p">(</span><span class="n">tag</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">removed</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The parse problem for an unknown element closest to a removed one.</span>
 
 <span class="sd">    &lt;prom-prot&gt; is nearer &lt;prom-port&gt;, which is gone, than anything the</span>
@@ -9218,13 +9273,13 @@ was meant and is not offered.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/fleet_xml.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1686</span>
-<span class="normal">1687</span>
-<span class="normal">1688</span>
-<span class="normal">1689</span>
-<span class="normal">1690</span>
-<span class="normal">1691</span>
-<span class="normal">1692</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">merge_devices_or_exit</span><span class="p">(</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1696</span>
+<span class="normal">1697</span>
+<span class="normal">1698</span>
+<span class="normal">1699</span>
+<span class="normal">1700</span>
+<span class="normal">1701</span>
+<span class="normal">1702</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">merge_devices_or_exit</span><span class="p">(</span>
     <span class="n">base</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Server</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">overlay</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Server</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">path</span><span class="p">:</span> <span class="n">Path</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Server</span><span class="p">,</span> <span class="o">...</span><span class="p">]:</span>
     <span class="k">try</span><span class="p">:</span>

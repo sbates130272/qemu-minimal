@@ -2283,22 +2283,22 @@ is written when the netdev is added, before anything brings it up.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">543</span>
-<span class="normal">544</span>
-<span class="normal">545</span>
-<span class="normal">546</span>
-<span class="normal">547</span>
-<span class="normal">548</span>
-<span class="normal">549</span>
-<span class="normal">550</span>
-<span class="normal">551</span>
-<span class="normal">552</span>
-<span class="normal">553</span>
-<span class="normal">554</span>
-<span class="normal">555</span>
-<span class="normal">556</span>
-<span class="normal">557</span>
-<span class="normal">558</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ernic_mtu_rule</span><span class="p">(</span><span class="n">mtu</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">563</span>
+<span class="normal">564</span>
+<span class="normal">565</span>
+<span class="normal">566</span>
+<span class="normal">567</span>
+<span class="normal">568</span>
+<span class="normal">569</span>
+<span class="normal">570</span>
+<span class="normal">571</span>
+<span class="normal">572</span>
+<span class="normal">573</span>
+<span class="normal">574</span>
+<span class="normal">575</span>
+<span class="normal">576</span>
+<span class="normal">577</span>
+<span class="normal">578</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ernic_mtu_rule</span><span class="p">(</span><span class="n">mtu</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The udev rule that gives every emulated ernic NIC of a guest MTU.</span>
 
 <span class="sd">    It matches the four PCI fields the image's 99-rocm-ernic.rules matches</span>
@@ -2346,20 +2346,20 @@ playbook runs: it is the guest's own systemd that applies it.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">561</span>
-<span class="normal">562</span>
-<span class="normal">563</span>
-<span class="normal">564</span>
-<span class="normal">565</span>
-<span class="normal">566</span>
-<span class="normal">567</span>
-<span class="normal">568</span>
-<span class="normal">569</span>
-<span class="normal">570</span>
-<span class="normal">571</span>
-<span class="normal">572</span>
-<span class="normal">573</span>
-<span class="normal">574</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ernic_mtu_qemu_args</span><span class="p">(</span><span class="n">mtu</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">581</span>
+<span class="normal">582</span>
+<span class="normal">583</span>
+<span class="normal">584</span>
+<span class="normal">585</span>
+<span class="normal">586</span>
+<span class="normal">587</span>
+<span class="normal">588</span>
+<span class="normal">589</span>
+<span class="normal">590</span>
+<span class="normal">591</span>
+<span class="normal">592</span>
+<span class="normal">593</span>
+<span class="normal">594</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ernic_mtu_qemu_args</span><span class="p">(</span><span class="n">mtu</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""The QEMU words that hand a guest ernic_mtu_rule(mtu) at boot.</span>
 
 <span class="sd">    An SMBIOS type 11 string systemd reads as a credential: PID 1 imports</span>
@@ -2400,27 +2400,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 921</span>
-<span class="normal"> 922</span>
-<span class="normal"> 923</span>
-<span class="normal"> 924</span>
-<span class="normal"> 925</span>
-<span class="normal"> 926</span>
-<span class="normal"> 927</span>
-<span class="normal"> 928</span>
-<span class="normal"> 929</span>
-<span class="normal"> 930</span>
-<span class="normal"> 931</span>
-<span class="normal"> 932</span>
-<span class="normal"> 933</span>
-<span class="normal"> 934</span>
-<span class="normal"> 935</span>
-<span class="normal"> 936</span>
-<span class="normal"> 937</span>
-<span class="normal"> 938</span>
-<span class="normal"> 939</span>
-<span class="normal"> 940</span>
-<span class="normal"> 941</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 941</span>
 <span class="normal"> 942</span>
 <span class="normal"> 943</span>
 <span class="normal"> 944</span>
@@ -2770,7 +2750,29 @@ playbook runs: it is the guest's own systemd that applies it.</p>
 <span class="normal">1288</span>
 <span class="normal">1289</span>
 <span class="normal">1290</span>
-<span class="normal">1291</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">plan</span><span class="p">(</span><span class="n">cfg</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+<span class="normal">1291</span>
+<span class="normal">1292</span>
+<span class="normal">1293</span>
+<span class="normal">1294</span>
+<span class="normal">1295</span>
+<span class="normal">1296</span>
+<span class="normal">1297</span>
+<span class="normal">1298</span>
+<span class="normal">1299</span>
+<span class="normal">1300</span>
+<span class="normal">1301</span>
+<span class="normal">1302</span>
+<span class="normal">1303</span>
+<span class="normal">1304</span>
+<span class="normal">1305</span>
+<span class="normal">1306</span>
+<span class="normal">1307</span>
+<span class="normal">1308</span>
+<span class="normal">1309</span>
+<span class="normal">1310</span>
+<span class="normal">1311</span>
+<span class="normal">1312</span>
+<span class="normal">1313</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">plan</span><span class="p">(</span><span class="n">cfg</span><span class="p">:</span> <span class="n">FleetConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Resolve the fleet settings into everything the templates need."""</span>
     <span class="n">count</span> <span class="o">=</span> <span class="n">cfg</span><span class="o">.</span><span class="n">count</span>
     <span class="k">if</span> <span class="n">count</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
@@ -2843,6 +2845,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
                 <span class="s2">"/opt/vfu/vfu-doorbell (rocm-xio's CI pushes it to ghcr.io)."</span><span class="p">)</span>
     <span class="n">_check_xio_pin</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">xio_ref</span><span class="p">,</span> <span class="n">cfg</span><span class="o">.</span><span class="n">xio_commit</span><span class="p">)</span>
     <span class="n">_check_pci_mmio_bridge</span><span class="p">(</span><span class="n">cfg</span><span class="p">)</span>
+    <span class="n">_check_filesystem</span><span class="p">(</span><span class="n">cfg</span><span class="p">,</span> <span class="n">count</span><span class="p">)</span>
 
     <span class="c1"># The mesh counts rocm-ernic PROCESSES, not VMs. At &lt;ernic-per-vm&gt; &gt; 1 the</span>
     <span class="c1"># two differ by that factor, and a message naming only the VM count would</span>
@@ -3122,6 +3125,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
         <span class="s2">"vm_filesystem"</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span>
             <span class="n">_split_per_vm</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">vm_filesystem</span><span class="p">,</span> <span class="n">count</span><span class="p">,</span> <span class="s2">"&lt;vm-filesystem&gt;"</span><span class="p">)</span>
         <span class="p">))</span> <span class="k">if</span> <span class="n">cfg</span><span class="o">.</span><span class="n">vm_filesystem</span> <span class="k">else</span> <span class="p">[],</span>
+        <span class="s2">"vm_filesystem_writable"</span><span class="p">:</span> <span class="n">cfg</span><span class="o">.</span><span class="n">vm_filesystem_writable</span><span class="p">,</span>
         <span class="s2">"vfio_user_root_port"</span><span class="p">:</span> <span class="n">cfg</span><span class="o">.</span><span class="n">vm_vfio_user_root_port</span><span class="p">,</span>
         <span class="s2">"tcp_port"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">ernic_tcp_port</span><span class="p">),</span>
         <span class="s2">"stats_port"</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">ernic_stats_port</span><span class="p">),</span>
@@ -3171,29 +3175,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1422</span>
-<span class="normal">1423</span>
-<span class="normal">1424</span>
-<span class="normal">1425</span>
-<span class="normal">1426</span>
-<span class="normal">1427</span>
-<span class="normal">1428</span>
-<span class="normal">1429</span>
-<span class="normal">1430</span>
-<span class="normal">1431</span>
-<span class="normal">1432</span>
-<span class="normal">1433</span>
-<span class="normal">1434</span>
-<span class="normal">1435</span>
-<span class="normal">1436</span>
-<span class="normal">1437</span>
-<span class="normal">1438</span>
-<span class="normal">1439</span>
-<span class="normal">1440</span>
-<span class="normal">1441</span>
-<span class="normal">1442</span>
-<span class="normal">1443</span>
-<span class="normal">1444</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1444</span>
 <span class="normal">1445</span>
 <span class="normal">1446</span>
 <span class="normal">1447</span>
@@ -4028,7 +4010,35 @@ playbook runs: it is the guest's own systemd that applies it.</p>
 <span class="normal">2276</span>
 <span class="normal">2277</span>
 <span class="normal">2278</span>
-<span class="normal">2279</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_compose</span><span class="p">(</span>
+<span class="normal">2279</span>
+<span class="normal">2280</span>
+<span class="normal">2281</span>
+<span class="normal">2282</span>
+<span class="normal">2283</span>
+<span class="normal">2284</span>
+<span class="normal">2285</span>
+<span class="normal">2286</span>
+<span class="normal">2287</span>
+<span class="normal">2288</span>
+<span class="normal">2289</span>
+<span class="normal">2290</span>
+<span class="normal">2291</span>
+<span class="normal">2292</span>
+<span class="normal">2293</span>
+<span class="normal">2294</span>
+<span class="normal">2295</span>
+<span class="normal">2296</span>
+<span class="normal">2297</span>
+<span class="normal">2298</span>
+<span class="normal">2299</span>
+<span class="normal">2300</span>
+<span class="normal">2301</span>
+<span class="normal">2302</span>
+<span class="normal">2303</span>
+<span class="normal">2304</span>
+<span class="normal">2305</span>
+<span class="normal">2306</span>
+<span class="normal">2307</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_compose</span><span class="p">(</span>
     <span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">layer_names</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">stack</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">_DEFAULT_STACK</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
@@ -4113,8 +4123,12 @@ playbook runs: it is the guest's own systemd that applies it.</p>
     <span class="k">for</span> <span class="n">share</span> <span class="ow">in</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"vm_filesystem"</span><span class="p">]:</span>
         <span class="c1"># Same path inside the container as outside: run-vm passes the path</span>
         <span class="c1"># straight to -virtfs, so a remapped mount point would name a</span>
-        <span class="c1"># directory the guest cannot see.</span>
-        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s1">'    - "</span><span class="si">{</span><span class="n">share</span><span class="si">}</span><span class="s1">:</span><span class="si">{</span><span class="n">share</span><span class="si">}</span><span class="s1">:ro"'</span><span class="p">)</span>
+        <span class="c1"># directory the guest cannot see. Read-only unless the fleet says</span>
+        <span class="c1"># &lt;vm-filesystem-writable&gt;. Writable, the container runs as the</span>
+        <span class="c1"># caller, so what a guest writes there is the caller's file and</span>
+        <span class="c1"># nothing the caller could not have written.</span>
+        <span class="n">mode</span> <span class="o">=</span> <span class="s2">""</span> <span class="k">if</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"vm_filesystem_writable"</span><span class="p">]</span> <span class="k">else</span> <span class="s2">":ro"</span>
+        <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s1">'    - "</span><span class="si">{</span><span class="n">share</span><span class="si">}</span><span class="s1">:</span><span class="si">{</span><span class="n">share</span><span class="si">}{</span><span class="n">mode</span><span class="si">}</span><span class="s1">"'</span><span class="p">)</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">'    - "${QEMU_TOOL_SRC:-../../..}:/qemu-tool-src:ro"'</span><span class="p">)</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"  devices:"</span><span class="p">)</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"    - /dev/kvm"</span><span class="p">)</span>
@@ -4555,6 +4569,8 @@ playbook runs: it is the guest's own systemd that applies it.</p>
         <span class="c1"># the last switch group.</span>
         <span class="k">if</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"pci_mmio_bridge"</span><span class="p">]:</span>
             <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"          --pci-mmio-bridge </span><span class="se">\\</span><span class="s2">"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"vm_filesystem"</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">spec</span><span class="p">[</span><span class="s2">"vm_filesystem_writable"</span><span class="p">]:</span>
+            <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"          --filesystem-readonly </span><span class="se">\\</span><span class="s2">"</span><span class="p">)</span>
         <span class="c1"># One --qemu-arg per word, with `=` so that a word starting with a</span>
         <span class="c1"># dash is the option's value and not another option. Single-quoted</span>
         <span class="c1"># for the shell this line is run by.</span>
@@ -4911,35 +4927,7 @@ playbook runs: it is the guest's own systemd that applies it.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2282</span>
-<span class="normal">2283</span>
-<span class="normal">2284</span>
-<span class="normal">2285</span>
-<span class="normal">2286</span>
-<span class="normal">2287</span>
-<span class="normal">2288</span>
-<span class="normal">2289</span>
-<span class="normal">2290</span>
-<span class="normal">2291</span>
-<span class="normal">2292</span>
-<span class="normal">2293</span>
-<span class="normal">2294</span>
-<span class="normal">2295</span>
-<span class="normal">2296</span>
-<span class="normal">2297</span>
-<span class="normal">2298</span>
-<span class="normal">2299</span>
-<span class="normal">2300</span>
-<span class="normal">2301</span>
-<span class="normal">2302</span>
-<span class="normal">2303</span>
-<span class="normal">2304</span>
-<span class="normal">2305</span>
-<span class="normal">2306</span>
-<span class="normal">2307</span>
-<span class="normal">2308</span>
-<span class="normal">2309</span>
-<span class="normal">2310</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2310</span>
 <span class="normal">2311</span>
 <span class="normal">2312</span>
 <span class="normal">2313</span>
@@ -4965,7 +4953,35 @@ playbook runs: it is the guest's own systemd that applies it.</p>
 <span class="normal">2333</span>
 <span class="normal">2334</span>
 <span class="normal">2335</span>
-<span class="normal">2336</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_prometheus</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="normal">2336</span>
+<span class="normal">2337</span>
+<span class="normal">2338</span>
+<span class="normal">2339</span>
+<span class="normal">2340</span>
+<span class="normal">2341</span>
+<span class="normal">2342</span>
+<span class="normal">2343</span>
+<span class="normal">2344</span>
+<span class="normal">2345</span>
+<span class="normal">2346</span>
+<span class="normal">2347</span>
+<span class="normal">2348</span>
+<span class="normal">2349</span>
+<span class="normal">2350</span>
+<span class="normal">2351</span>
+<span class="normal">2352</span>
+<span class="normal">2353</span>
+<span class="normal">2354</span>
+<span class="normal">2355</span>
+<span class="normal">2356</span>
+<span class="normal">2357</span>
+<span class="normal">2358</span>
+<span class="normal">2359</span>
+<span class="normal">2360</span>
+<span class="normal">2361</span>
+<span class="normal">2362</span>
+<span class="normal">2363</span>
+<span class="normal">2364</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_prometheus</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="n">out</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"---"</span><span class="p">]</span>
     <span class="n">out</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"# Generated by `qemu-tool gen-compose`. Do not edit."</span><span class="p">)</span>
     <span class="n">out</span> <span class="o">+=</span> <span class="n">_provenance_lines</span><span class="p">(</span><span class="n">digest</span><span class="p">)</span>
@@ -5051,35 +5067,7 @@ the same values the compose file publishes, from the same <code>plan()</code>.</
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2339</span>
-<span class="normal">2340</span>
-<span class="normal">2341</span>
-<span class="normal">2342</span>
-<span class="normal">2343</span>
-<span class="normal">2344</span>
-<span class="normal">2345</span>
-<span class="normal">2346</span>
-<span class="normal">2347</span>
-<span class="normal">2348</span>
-<span class="normal">2349</span>
-<span class="normal">2350</span>
-<span class="normal">2351</span>
-<span class="normal">2352</span>
-<span class="normal">2353</span>
-<span class="normal">2354</span>
-<span class="normal">2355</span>
-<span class="normal">2356</span>
-<span class="normal">2357</span>
-<span class="normal">2358</span>
-<span class="normal">2359</span>
-<span class="normal">2360</span>
-<span class="normal">2361</span>
-<span class="normal">2362</span>
-<span class="normal">2363</span>
-<span class="normal">2364</span>
-<span class="normal">2365</span>
-<span class="normal">2366</span>
-<span class="normal">2367</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2367</span>
 <span class="normal">2368</span>
 <span class="normal">2369</span>
 <span class="normal">2370</span>
@@ -5143,7 +5131,35 @@ the same values the compose file publishes, from the same <code>plan()</code>.</
 <span class="normal">2428</span>
 <span class="normal">2429</span>
 <span class="normal">2430</span>
-<span class="normal">2431</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_inventory</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="normal">2431</span>
+<span class="normal">2432</span>
+<span class="normal">2433</span>
+<span class="normal">2434</span>
+<span class="normal">2435</span>
+<span class="normal">2436</span>
+<span class="normal">2437</span>
+<span class="normal">2438</span>
+<span class="normal">2439</span>
+<span class="normal">2440</span>
+<span class="normal">2441</span>
+<span class="normal">2442</span>
+<span class="normal">2443</span>
+<span class="normal">2444</span>
+<span class="normal">2445</span>
+<span class="normal">2446</span>
+<span class="normal">2447</span>
+<span class="normal">2448</span>
+<span class="normal">2449</span>
+<span class="normal">2450</span>
+<span class="normal">2451</span>
+<span class="normal">2452</span>
+<span class="normal">2453</span>
+<span class="normal">2454</span>
+<span class="normal">2455</span>
+<span class="normal">2456</span>
+<span class="normal">2457</span>
+<span class="normal">2458</span>
+<span class="normal">2459</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">render_inventory</span><span class="p">(</span><span class="n">spec</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">digest</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""The fleet's ansible inventory, derived from the same &lt;vm-count&gt;.</span>
 
 <span class="sd">    Generated rather than hand-kept because the failure mode of a stale one is</span>
@@ -5267,35 +5283,7 @@ the same values the compose file publishes, from the same <code>plan()</code>.</
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/gen_compose.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2737</span>
-<span class="normal">2738</span>
-<span class="normal">2739</span>
-<span class="normal">2740</span>
-<span class="normal">2741</span>
-<span class="normal">2742</span>
-<span class="normal">2743</span>
-<span class="normal">2744</span>
-<span class="normal">2745</span>
-<span class="normal">2746</span>
-<span class="normal">2747</span>
-<span class="normal">2748</span>
-<span class="normal">2749</span>
-<span class="normal">2750</span>
-<span class="normal">2751</span>
-<span class="normal">2752</span>
-<span class="normal">2753</span>
-<span class="normal">2754</span>
-<span class="normal">2755</span>
-<span class="normal">2756</span>
-<span class="normal">2757</span>
-<span class="normal">2758</span>
-<span class="normal">2759</span>
-<span class="normal">2760</span>
-<span class="normal">2761</span>
-<span class="normal">2762</span>
-<span class="normal">2763</span>
-<span class="normal">2764</span>
-<span class="normal">2765</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">2765</span>
 <span class="normal">2766</span>
 <span class="normal">2767</span>
 <span class="normal">2768</span>
@@ -5390,7 +5378,35 @@ the same values the compose file publishes, from the same <code>plan()</code>.</
 <span class="normal">2857</span>
 <span class="normal">2858</span>
 <span class="normal">2859</span>
-<span class="normal">2860</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
+<span class="normal">2860</span>
+<span class="normal">2861</span>
+<span class="normal">2862</span>
+<span class="normal">2863</span>
+<span class="normal">2864</span>
+<span class="normal">2865</span>
+<span class="normal">2866</span>
+<span class="normal">2867</span>
+<span class="normal">2868</span>
+<span class="normal">2869</span>
+<span class="normal">2870</span>
+<span class="normal">2871</span>
+<span class="normal">2872</span>
+<span class="normal">2873</span>
+<span class="normal">2874</span>
+<span class="normal">2875</span>
+<span class="normal">2876</span>
+<span class="normal">2877</span>
+<span class="normal">2878</span>
+<span class="normal">2879</span>
+<span class="normal">2880</span>
+<span class="normal">2881</span>
+<span class="normal">2882</span>
+<span class="normal">2883</span>
+<span class="normal">2884</span>
+<span class="normal">2885</span>
+<span class="normal">2886</span>
+<span class="normal">2887</span>
+<span class="normal">2888</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span>
     <span class="n">xml</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">output_dir</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span>
     <span class="n">check</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>

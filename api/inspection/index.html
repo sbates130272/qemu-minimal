@@ -653,6 +653,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.inspect.SSH_ONLY_THIS_KEY" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;SSH_ONLY_THIS_KEY
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.inspect.records" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1276,6 +1287,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#qemu_tool.inspect.SSH_ONLY_THIS_KEY" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;SSH_ONLY_THIS_KEY
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#qemu_tool.inspect.records" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1862,6 +1884,28 @@ connects the way <code>inspect</code> said it would.</p>
 
 
 
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="qemu_tool.inspect.SSH_ONLY_THIS_KEY" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <span class="doc doc-object-name doc-attribute-name">SSH_ONLY_THIS_KEY</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#qemu_tool.inspect.SSH_ONLY_THIS_KEY" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="n">SSH_ONLY_THIS_KEY</span> <span class="o">=</span> <span class="p">[</span><span class="s1">'-o'</span><span class="p">,</span> <span class="s1">'IdentitiesOnly=yes'</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+    </div>
+
+</div>
+
 
 
 
@@ -2050,16 +2094,7 @@ an identity the guest does not accept just buys a refusal.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/inspect.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">120</span>
-<span class="normal">121</span>
-<span class="normal">122</span>
-<span class="normal">123</span>
-<span class="normal">124</span>
-<span class="normal">125</span>
-<span class="normal">126</span>
-<span class="normal">127</span>
-<span class="normal">128</span>
-<span class="normal">129</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">129</span>
 <span class="normal">130</span>
 <span class="normal">131</span>
 <span class="normal">132</span>
@@ -2080,7 +2115,16 @@ an identity the guest does not accept just buys a refusal.</p>
 <span class="normal">147</span>
 <span class="normal">148</span>
 <span class="normal">149</span>
-<span class="normal">150</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ssh_argv</span><span class="p">(</span>
+<span class="normal">150</span>
+<span class="normal">151</span>
+<span class="normal">152</span>
+<span class="normal">153</span>
+<span class="normal">154</span>
+<span class="normal">155</span>
+<span class="normal">156</span>
+<span class="normal">157</span>
+<span class="normal">158</span>
+<span class="normal">159</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ssh_argv</span><span class="p">(</span>
     <span class="n">record</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="n">strict_host_key</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
     <span class="n">extra</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -2107,7 +2151,7 @@ an identity the guest does not accept just buys a refusal.</p>
         <span class="n">argv</span> <span class="o">+=</span> <span class="n">_SSH_LOOSE_HOST_KEY</span>
     <span class="n">argv</span> <span class="o">+=</span> <span class="p">[</span><span class="s2">"-p"</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">port</span><span class="p">)]</span>
     <span class="k">if</span> <span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"ssh_key_file"</span><span class="p">):</span>
-        <span class="n">argv</span> <span class="o">+=</span> <span class="p">[</span><span class="s2">"-i"</span><span class="p">,</span> <span class="n">record</span><span class="p">[</span><span class="s2">"ssh_key_file"</span><span class="p">]]</span>
+        <span class="n">argv</span> <span class="o">+=</span> <span class="p">[</span><span class="s2">"-i"</span><span class="p">,</span> <span class="n">record</span><span class="p">[</span><span class="s2">"ssh_key_file"</span><span class="p">],</span> <span class="o">*</span><span class="n">SSH_ONLY_THIS_KEY</span><span class="p">]</span>
     <span class="n">argv</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">record</span><span class="p">[</span><span class="s1">'username'</span><span class="p">]</span><span class="si">}</span><span class="s2">@</span><span class="si">{</span><span class="n">record</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'ssh_host'</span><span class="p">)</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">'localhost'</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="n">argv</span> <span class="o">+=</span> <span class="nb">list</span><span class="p">(</span><span class="n">extra</span> <span class="ow">or</span> <span class="p">[])</span>
     <span class="k">return</span> <span class="n">argv</span>
@@ -2142,16 +2186,7 @@ an identity the guest does not accept just buys a refusal.</p>
   <section data-search-exclude>
                 <details class="mkdocstrings-source">
               <summary>Source code in <code>qemu/qemu-tool/inspect.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">153</span>
-<span class="normal">154</span>
-<span class="normal">155</span>
-<span class="normal">156</span>
-<span class="normal">157</span>
-<span class="normal">158</span>
-<span class="normal">159</span>
-<span class="normal">160</span>
-<span class="normal">161</span>
-<span class="normal">162</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">162</span>
 <span class="normal">163</span>
 <span class="normal">164</span>
 <span class="normal">165</span>
@@ -2176,7 +2211,16 @@ an identity the guest does not accept just buys a refusal.</p>
 <span class="normal">184</span>
 <span class="normal">185</span>
 <span class="normal">186</span>
-<span class="normal">187</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ssh_run</span><span class="p">(</span>
+<span class="normal">187</span>
+<span class="normal">188</span>
+<span class="normal">189</span>
+<span class="normal">190</span>
+<span class="normal">191</span>
+<span class="normal">192</span>
+<span class="normal">193</span>
+<span class="normal">194</span>
+<span class="normal">195</span>
+<span class="normal">196</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">ssh_run</span><span class="p">(</span>
     <span class="n">vm_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">xml</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">strict_host_key</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
